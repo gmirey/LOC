@@ -34,7 +34,7 @@ you can run "rundirectsample.bat" from there, to launch that 'testWinX64Backend.
 
 This initial commit is configured in debug mode, with most of my current debugging bells-and-whistles still active, and runs single-thread. So it won't surely feel that fast, and produce various dev-only outputs: an ir-dump, and an almost-full-traces log, along the way. It also has asserts all over the place. Despite this, stability is not guaranteed (not even proper terminations through those 'asserts'... there are still ways in which it may still plain crash).
 
-The resulting executable's stability is not guaranteed either. The auto-checks specific to LOC language rule enforcement (arithmetic overflows, table indices...) hich are currently implemented would trigger a halt, but there is no polished handler atm which would warn the end user about it. And it may just plain crash, also (why not).
+The resulting executable's stability is not guaranteed either. The auto-checks specific to LOC language rule enforcement (arithmetic overflows, table indices...) which are currently implemented would trigger a halt, but there is no polished handler atm which would warn the end user about it. And it may just plain crash, also (why not).
 
 'LOC-syntax-notepad++.xml' is provided for a crude syntax-coloring scheme for LOC, with notepad++. It is *FAR* from perfect as it is.
 
