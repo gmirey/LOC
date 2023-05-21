@@ -1,0 +1,50 @@
+
+k :: #load "demo_kernel.loc"
+
+// Draws a red rectangle, with TopLeft coords at (X=Left, Y=Top), and given Width (in X) and Height (in Y)
+DrawRedRectangle :: proc (Left as int, Top as int, Width as int, Height as int)
+	DrawRectangle(Left, Top, Width, Height, RED)
+	
+	
+// Draws a blue circle, with center at (CenterX, CenterY) and given Radius 
+DrawBlueCircle :: proc (CenterX as int, CenterY as int, Radius as int)
+	DrawCircle(CenterX, CenterY, Radius, BLUE)
+
+//
+// Predefined Colors
+//
+
+//				    RR GG BB
+
+RED   		:: 0x00_ff_40_40
+BLUE  		:: 0x00_60_60_ff
+GREEN 		:: 0x00_20_ff_20
+
+WHITE 		:: 0x00_ff_ff_ff
+GREY  		:: 0x00_80_80_80
+BLACK 		:: 0x00_00_00_00
+
+YELLOW 		:: 0x00_ff_ff_00
+CYAN 		:: 0x00_00_ff_ff
+MAGENTA 	:: 0x00_ff_00_ff
+
+ORANGE 		:: 0x00_ff_90_00
+
+// Color creation utility
+color_from_RGB :: proc(R as u8, G as u8, B as u8) -> u32
+	return u32(B) | u32(G) << 8 | u32(R) << 16
+
+
+DrawRectangle :: proc (Left as int, Top as int, Width as int, Height as int, ColorBGRA as u32)
+	k.DrawRectangleTo(k.GlobalBuffer, Left, Top, Width, Height, ColorBGRA)
+
+DrawSolidRectangle :: proc (Left as int, Top as int, Width as int, Height as int, ColorBGRA as u32)
+	k.DrawSolidRectangleTo(k.GlobalBuffer, Left, Top, Width, Height, ColorBGRA)
+	
+DrawCircle :: proc (CenterX as int, CenterY as int, Radius as int, ColorBGRA as u32)
+	k.DrawCircleTo(k.GlobalBuffer, CenterX, CenterY, Radius, ColorBGRA)
+
+DrawImage :: proc (Left as int, Top as int, Image as k.Bitmap)
+	k.DrawBitmapTo(k.GlobalBuffer, Left, Top, Image)
+
+	

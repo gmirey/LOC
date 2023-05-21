@@ -1,0 +1,165 @@
+
+wint :: #load "win_base_types.loc"
+kernel32 :: #load "kernel32.loc"
+
+// prints an ffstring to the console ; does not care too much about input or output format: emits as bytes
+//
+print_ffstring :: proc (s as !string)
+	stdout as= kernel32.GetStdHandle(kernel32.STD_OUTPUT_HANDLE)
+	_ := kernel32.WriteConsole(stdout, s.ptr_to_bytes, s.length_in_bytes, 0, 0)
+	
+// prints a stringview to the console ; does not care too much about input or output format: emits as bytes
+//
+print_string :: proc (s as string)
+	stdout as= kernel32.GetStdHandle(kernel32.STD_OUTPUT_HANDLE)
+	_ := kernel32.WriteConsole(stdout, s.ptr_to_bytes, s.length_in_bytes, 0, 0)
+
+// given pBuffer a buffer of bytes, and a byte count, reverts bytes in buffer. If byte count is odd, reverts around pivot middle.
+//
+revert_digits_in :: proc (pBuffer as ^.u8, uDigitCount as u8)
+	uDigitRev as u8 = 0
+	uDigitMid as u8 = uDigitCount >> 1
+	uDigitRevRev as u8 = uDigitCount - 1
+	while uDigitRev < uDigitMid
+		tmp as u8 = (pBuffer + uDigitRev)^
+		(pBuffer + uDigitRev)^ := (pBuffer + uDigitRevRev)^
+		(pBuffer + uDigitRevRev)^ := tmp
+		uDigitRev += 1
+		uDigitRevRev -= 1 
+
+// given a r64 register, emits its hexadecimal representation to the provided buffer
+// (=> skipping leading zeroes, or up to max 16 chars, unless minDigits is greater)
+// returns number of emitted char (note that no trailing char '\0' will be emitted here)
+//
+sprint_hex64_to :: proc (pBuffer as ^.u8, n as r64, minDigits as u8, uFiller as u8) -> u8
+	uDigitIndex as u8 = 0
+	uRemainingValue as u64 = u64.#trans(n)
+
+	while uRemainingValue != 0
+		uHexVal as= u8.#trunc(uRemainingValue) & 0x0F
+		uHexCode as u8 = ---
+		if uHexVal < 10
+			uHexCode := u8(#"0") + uHexVal
+		else
+			uHexCode := u8(#"A") + uHexVal - 10
+
+		(pBuffer + uDigitIndex)^ := uHexCode
+		uDigitIndex += 1
+		uRemainingValue >>= 4
+
+	if uDigitIndex == 0
+		(pBuffer + 0)^ := u8(#"0")
+		uDigitIndex := 1
+	
+	while uDigitIndex < minDigits
+		(pBuffer + uDigitIndex)^ := uFiller
+		uDigitIndex += 1
+
+	revert_digits_in(pBuffer, uDigitIndex)
+	return uDigitIndex
+
+
+// given a r64 register, emits its decimal representation (as an unsigned number) to the provided buffer
+// (=> skipping leading zeroes, or up to max 20 chars, unless minDigits is greater)
+// returns number of emitted char (note that no trailing char '\0' will be emitted here)
+//
+sprint_dec64_to :: proc (pBuffer as ^.u8, n as r64, minDigits as u8, uFiller as u8) -> u8
+	uDigitIndex as u8 = 0
+	uRemainingValue as u64 = u64.#trans(n)
+
+	while uRemainingValue != 0
+		uDigitVal as= uRemainingValue %% 10
+		(pBuffer + uDigitIndex)^ := u8(#"0") + u8(uDigitVal)
+		uDigitIndex += 1
+		uRemainingValue /%= 10
+		
+	if uDigitIndex == 0
+		(pBuffer + 0)^ := u8(#"0")
+		uDigitIndex := 1
+
+	while uDigitIndex < minDigits
+		(pBuffer + uDigitIndex)^ := uFiller
+		uDigitIndex += 1
+		
+	revert_digits_in(pBuffer, uDigitIndex)
+	return uDigitIndex
+
+
+// given an i64 value, emits its decimal representation to the provided buffer
+// (=> skipping leading zeroes, or up to max 19 chars + sign, unless minDigits is greater)
+// returns number of emitted char (note that no trailing char '\0' will be emitted here)
+//
+sprint_signed_dec64_to :: proc (pBuffer as ^.u8, n as i64, minDigits as u8, uFiller as u8, bForcePlus as bool) -> u8
+	uDigitIndex as u8 = 0
+	
+	bDisplaySign as= bForcePlus
+	uSignChar as= u8(#"+")
+	uRemainingValue as u64 = u64.#trans(n)
+	if n < 0
+		bDisplaySign := true
+		uSignChar := u8(#"-")
+		uRemainingValue := u64.#trans(-n)
+
+	while uRemainingValue != 0
+		uDigitVal as= uRemainingValue %% 10
+		(pBuffer + uDigitIndex)^ := u8(#"0") + u8(uDigitVal)
+		uDigitIndex += 1
+		uRemainingValue /%= 10
+			
+	if uDigitIndex == 0
+		(pBuffer + 0)^ := u8(#"0")
+		uDigitIndex := 1
+
+	if bDisplaySign and uFiller == u8(#" ")
+		(pBuffer + uDigitIndex)^ := uSignChar
+		uDigitIndex += 1
+		
+	while uDigitIndex < minDigits
+		(pBuffer + uDigitIndex)^ := uFiller
+		uDigitIndex += 1
+			
+	if bDisplaySign and uFiller != u8(#" ")
+		(pBuffer + uDigitIndex)^ := uSignChar
+		uDigitIndex += 1
+		
+	revert_digits_in(pBuffer, uDigitIndex)
+	return uDigitIndex
+
+// given a r64 register, emits its hexadecimal representation to the console
+// (=> skipping leading zeroes, or up to max 16 chars, unless minDigits is greater)
+//
+print_hex64 :: proc (n as r64, minDigits as u8, uFiller as u8)
+	tAsciiChars as [200]u8
+	numChars as= sprint_hex64_to(&tAsciiChars, n, minDigits, uFiller)
+	result as string
+	result.ptr_to_bytes := (^.r8)(&tAsciiChars)
+	result.length_in_bytes := u32(numChars)
+	result.flags := 0 // TODO: known ASCII, known valid UTF8...
+	print_string(result)
+	
+// given a r64 register, emits its decimal representation (as an unsigned number) to the console
+// (=> skipping leading zeroes, or up to max 20 chars, unless minDigits is greater)
+//
+print_dec64 :: proc (n as r64, minDigits as u8, uFiller as u8)
+	tAsciiChars as [200]u8
+	numChars as= sprint_dec64_to(&tAsciiChars, n, minDigits, uFiller)
+	result as string
+	result.ptr_to_bytes := (^.r8)(&tAsciiChars)
+	result.length_in_bytes := u32(numChars)
+	result.flags := 0 // TODO: known ASCII, known valid UTF8...
+	print_string(result)
+	
+// given an i64 value, emits its decimal representation to the console
+// (=> skipping leading zeroes, or up to max 19 chars + sign, unless minDigits is greater)
+//
+print_signed_dec64 :: proc (n as i64, minDigits as u8, uFiller as u8, bForcePlus as bool)
+	tAsciiChars as [200]u8
+	numChars as= sprint_signed_dec64_to(&tAsciiChars, n, minDigits, uFiller, bForcePlus)
+	result as string
+	result.ptr_to_bytes := (^.r8)(&tAsciiChars)
+	result.length_in_bytes := u32(numChars)
+	result.flags := 0 // TODO: known ASCII, known valid UTF8...
+	print_string(result)
+	
+
+	

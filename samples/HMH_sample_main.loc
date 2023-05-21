@@ -1,0 +1,437 @@
+
+/* ********************************************* *
+ *
+ *	LOC Sample Program
+ *
+ * **********************************************/
+
+print :: #load "print.loc"
+wint :: #load "win_base_types.loc"
+kernel32 :: #load "kernel32.loc"
+
+using print
+
+SRCCOPY 	:: wint.DWORD(0x00CC0020) /* dest = source                   */
+SRCPAINT 	:: wint.DWORD(0x00EE0086) /* dest = source OR dest           */
+SRCAND 		:: wint.DWORD(0x008800C6) /* dest = source AND dest          */
+SRCINVERT 	:: wint.DWORD(0x00660046) /* dest = source XOR dest          */
+SRCERASE 	:: wint.DWORD(0x00440328) /* dest = source AND (NOT dest )   */
+NOTSRCCOPY 	:: wint.DWORD(0x00330008) /* dest = (NOT source)             */
+NOTSRCERASE :: wint.DWORD(0x001100A6) /* dest = (NOT src) AND (NOT dest) */
+MERGECOPY 	:: wint.DWORD(0x00C000CA) /* dest = (source AND pattern)     */
+MERGEPAINT 	:: wint.DWORD(0x00BB0226) /* dest = (NOT source) OR dest     */
+PATCOPY 	:: wint.DWORD(0x00F00021) /* dest = pattern                  */
+PATPAINT 	:: wint.DWORD(0x00FB0A09) /* dest = DPSnoo                   */
+PATINVERT 	:: wint.DWORD(0x005A0049) /* dest = pattern XOR dest         */
+DSTINVERT 	:: wint.DWORD(0x00550009) /* dest = (NOT dest)               */
+BLACKNESS 	:: wint.DWORD(0x00000042) /* dest = BLACK                    */
+WHITENESS 	:: wint.DWORD(0x00FF0062) /* dest = WHITE                    */
+
+
+win32_offscreen_buffer :: struct	
+	Info as kernel32.BITMAPINFO
+	Memory as rawptr
+	Width as int
+	Height as int
+	Pitch as int
+	BytesPerPixel as int
+
+Running as bool
+GlobalBackBuffer as win32_offscreen_buffer
+
+win32_window_dimension :: struct => Width, Height as int
+
+x_input_get_state :: signature proc(dwUserIndex as wint.DWORD, pState as ^.XINPUT_STATE) -> wint.DWORD
+x_input_set_state :: signature proc(dwUserIndex as wint.DWORD, pVibration as ^.XINPUT_VIBRATION) -> wint.DWORD
+
+XINPUT_GAMEPAD_DPAD_UP          :: 0x0001
+XINPUT_GAMEPAD_DPAD_DOWN        :: 0x0002
+XINPUT_GAMEPAD_DPAD_LEFT        :: 0x0004
+XINPUT_GAMEPAD_DPAD_RIGHT       :: 0x0008
+XINPUT_GAMEPAD_START            :: 0x0010
+XINPUT_GAMEPAD_BACK             :: 0x0020
+XINPUT_GAMEPAD_LEFT_THUMB       :: 0x0040
+XINPUT_GAMEPAD_RIGHT_THUMB      :: 0x0080
+XINPUT_GAMEPAD_LEFT_SHOULDER    :: 0x0100
+XINPUT_GAMEPAD_RIGHT_SHOULDER   :: 0x0200
+XINPUT_GAMEPAD_A                :: 0x1000
+XINPUT_GAMEPAD_B                :: 0x2000
+XINPUT_GAMEPAD_X                :: 0x4000
+XINPUT_GAMEPAD_Y                :: 0x8000
+
+XINPUT_GAMEPAD :: struct
+	wButtons as wint.WORD
+	bLeftTrigger as wint.BYTE
+	bRightTrigger as wint.BYTE
+	sThumbLX as wint.SHORT
+	sThumbLY as wint.SHORT
+	sThumbRX as wint.SHORT
+	sThumbRY as wint.SHORT
+
+XINPUT_STATE :: struct
+	dwPacketNumber as wint.DWORD
+	Gamepad as XINPUT_GAMEPAD
+
+XINPUT_VIBRATION :: struct
+	wLeftMotorSpeed as wint.WORD
+	wRightMotorSpeed as wint.WORD
+
+// TODO: work out why the direct declaration of these stubs as initializers of the global variable didn't go as planned
+
+ERROR_INVALID_FUNCTION :: 1
+
+XInputGetStateStub :: proc (dwUserIndex as wint.DWORD, pState as ^.XINPUT_STATE) -> wint.DWORD
+	return ERROR_INVALID_FUNCTION
+	
+XInputSetStateStub :: proc (dwUserIndex as wint.DWORD, pVibration as ^.XINPUT_VIBRATION) -> wint.DWORD
+	return ERROR_INVALID_FUNCTION
+
+// function *variable*, initially pointing to stubs
+XInputGetState as= x_input_get_state.#trans(XInputGetStateStub)
+XInputSetState as= x_input_set_state.#trans(XInputSetStateStub)
+
+Win32LoadInput :: proc()
+	XInputLibrary as= kernel32.LoadLibrary("xinput1_3.dll")
+	if XInputLibrary != 0
+		print_ffstring("Successfully loaded XInput library\n")
+		print_ffstring("XInputGetState Stub was at proc address 0x")
+		print_hex64(r64.#trans(XInputGetState), 16, u8(#"0"))
+		print_ffstring("\n")
+		print_ffstring("XInputSetState Stub was at proc address 0x")
+		print_hex64(r64.#trans(XInputSetState), 16, u8(#"0"))
+		print_ffstring("\n")
+		XInputGetState := x_input_get_state.#trans(kernel32.GetProcAddress(XInputLibrary, rawptr.#trans("XInputGetState")))
+		XInputSetState := x_input_set_state.#trans(kernel32.GetProcAddress(XInputLibrary, rawptr.#trans("XInputSetState")))
+		print_ffstring("XInputGetState now got proc address 0x")
+		print_hex64(r64.#trans(XInputGetState), 16, u8(#"0"))
+		print_ffstring("\n")
+		print_ffstring("XInputSetState now got proc address 0x")
+		print_hex64(r64.#trans(XInputSetState), 16, u8(#"0"))
+		print_ffstring("\n")
+	else
+		print_ffstring("failed to load XInput library\n")
+
+Win32GetWindowDimension :: proc(Window as wint.HWND) -> win32_window_dimension
+	result as win32_window_dimension = --- // TODO: use a named return instead of this...
+	ClientRect as kernel32.RECT = ---
+	_ := kernel32.GetClientRect(Window, &ClientRect)
+	result.Width := ClientRect.right - ClientRect.left
+	result.Height := ClientRect.bottom - ClientRect.top
+	return result // TODO: a bare version of return when already assigned, once we have those ?
+
+BytesPerPixel_ :: 4
+
+DIB_RGB_COLORS :: 0
+
+RenderWeirdGradient :: proc (Buffer as win32_offscreen_buffer, XOffset as int, YOffset as int)
+
+	Row as= (^.u8)(Buffer.Memory)
+	
+	Y as int
+	while Y < Buffer.Height
+
+		Pixel as= (^.u32)(Row)
+
+		X as int
+		while X < Buffer.Width
+		
+			Blue as= u8.#trunc(X +% XOffset)
+			Green as= u8.#trunc(Y +% YOffset)
+			
+			Pixel^ := u32(Green) << 8 | Blue
+			Pixel += 1
+		
+			X += 1
+		
+		Row += Buffer.Pitch
+		
+		Y += 1
+
+//---------------------------------------------------
+// Re-creates our color buffer, typically called on resize
+//---------------------------------------------------
+Win32ResizeDIBSection :: proc(Buffer as ^.win32_offscreen_buffer, Width as int, Height as int)
+	
+	MEM_COMMIT  	:: 0x00001000  
+	MEM_RESERVE 	:: 0x00002000  
+
+	MEM_DECOMMIT    :: 0x00004000  
+	MEM_RELEASE    	:: 0x00008000  
+	MEM_FREE		:: 0x00010000  
+	
+	if (Buffer^.Memory != 0)
+		_ := kernel32.VirtualFree(Buffer^.Memory, 0, MEM_RELEASE)
+	
+	BI_RGB :: 0
+	
+	Buffer^.Width := Width
+	Buffer^.Height := Height
+	
+	Buffer^.Info.bmiHeader.biSize := sizeof((Buffer^).Info.bmiHeader)
+	Buffer^.Info.bmiHeader.biWidth := Width
+	Buffer^.Info.bmiHeader.biHeight := -Height
+	Buffer^.Info.bmiHeader.biPlanes := 1
+	Buffer^.Info.bmiHeader.biBitCount := 32
+	Buffer^.Info.bmiHeader.biCompression := BI_RGB
+	
+	Buffer^.BytesPerPixel := BytesPerPixel_
+	Buffer^.Pitch := Buffer^.Width * Buffer^.BytesPerPixel
+	
+	PAGE_NOACCESS 		   :: 0x01    
+	PAGE_READONLY 		   :: 0x02    
+	PAGE_READWRITE 		   :: 0x04    
+	PAGE_WRITECOPY         :: 0x08    
+	PAGE_EXECUTE           :: 0x10    
+	PAGE_EXECUTE_READ 	   :: 0x20    
+	PAGE_EXECUTE_READWRITE :: 0x40    
+	PAGE_EXECUTE_WRITECOPY :: 0x80    
+	
+	BitmapMemorySize as= Buffer^.Pitch * Buffer^.Height
+	Buffer^.Memory := kernel32.VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE)
+
+//---------------------------------------------------
+// Refresh contents of our color buffer to the window display
+//---------------------------------------------------
+Win32DisplayBufferInWindow :: proc(
+		DeviceContext as wint.HDC, WindowWidth as int, WindowHeight as int,
+		Buffer as win32_offscreen_buffer)
+
+	_ := kernel32.StretchDIBits(DeviceContext,
+								0, 0, WindowWidth, WindowHeight,
+								0, 0, Buffer.Width, Buffer.Height,
+								Buffer.Memory,
+								&Buffer.Info,
+								DIB_RGB_COLORS, SRCCOPY)
+
+
+//---------------------------------------------------
+// Window message-handling 'callback'
+//---------------------------------------------------
+Win32WindowProc :: proc(
+			hWnd as wint.HWND,
+			uMsg as wint.UINT,
+			wParam as wint.WPARAM,
+			lParam as wint.LPARAM) ->
+		wint.LRESULT
+
+	WM_CREATE :: 0x0001
+	WM_DESTROY :: 0x0002
+	WM_MOVE :: 0x0003
+	WM_SIZE :: 0x0005
+	WM_CLOSE :: 0x0010
+	WM_PAINT :: 0x000F
+	WM_ACTIVATEAPP :: 0x001C
+
+	ourResult as wint.LRESULT
+
+	// TODO: convert that if-chain to a switch, once LOC has those.
+	
+	if uMsg == WM_CREATE
+		print_ffstring("WM_CREATE\n")
+		
+	elif uMsg == WM_MOVE
+		print_ffstring("WM_MOVE\n")
+	
+	elif uMsg == WM_SIZE
+		Dimension as= Win32GetWindowDimension(hWnd)
+		Win32ResizeDIBSection(&GlobalBackBuffer, Dimension.Width, Dimension.Height)
+		
+	elif uMsg == WM_PAINT
+
+		Paint as kernel32.PAINTSTRUCT = ---
+		DeviceContext as wint.HDC = kernel32.BeginPaint(hWnd, &Paint)
+		
+		if DeviceContext != 0
+		
+			Dimension as= Win32GetWindowDimension(hWnd)
+			Win32DisplayBufferInWindow(DeviceContext, Dimension.Width, Dimension.Height, GlobalBackBuffer)
+
+			_ := kernel32.EndPaint(hWnd, &Paint)
+				
+		else
+			print_ffstring("failed BeginPaint...\n")
+	
+	elif uMsg == WM_CLOSE
+		Running := false
+	
+	elif uMsg == WM_DESTROY
+		Running := false
+	
+	elif uMsg == WM_ACTIVATEAPP
+		print_ffstring("WM_ACTIVATEAPP\n")
+		
+	else
+		ourResult := kernel32.DefWindowProc(hWnd, uMsg, wParam, lParam)
+				
+	return ourResult
+
+
+// After entry-point and getting a handle to the current process in windows,
+// This is the 'windows' version of our 'main' proc
+win32_main :: proc (hInstance as wint.HINSTANCE) -> int
+
+	Win32LoadInput()
+	
+	/*
+	iPerfCountPerSecond as i64
+	_ := kernel32.QueryPerformanceFrequency(&iPerfCountPerSecond)
+
+	print.print_ffstring("Perf Frequency = ")
+	print.print_signed_dec64(iPerfCountPerSecond, 0, u8(#" "), false)
+	print.print_ffstring(" counts/sec\n")
+	
+	iPerfCountResult as i64
+	_ := kernel32.QueryPerformanceCounter(&iPerfCountResult)
+	print.print_ffstring("Perf Count Now = ")
+	print.print_signed_dec64(iPerfCountResult, 0, u8(#" "), false)
+	print.print_ffstring("\n")
+	*/
+	
+	myWndClass as kernel32.WNDCLASSEX
+	myWndClass.cbSize := sizeof kernel32.WNDCLASSEX
+
+	CS_BYTEALIGNCLIENT 		:: 0x1000
+	CS_BYTEALIGNWINDOW 		:: 0x2000
+	CS_CLASSDC				:: 0x0040
+	CS_DBLCLKS				:: 0x0008
+	CS_DROPSHADOW			:: 0x00020000
+	CS_GLOBALCLASS			:: 0x4000
+	CS_HREDRAW				:: 0x0002
+	CS_NOCLOSE				:: 0x0200
+	CS_OWNDC				:: 0x0020
+	CS_PARENTDC				:: 0x0080
+	CS_SAVEBITS				:: 0x0800
+	CS_VREDRAW				:: 0x0001
+	
+	myWndClass.style := CS_HREDRAW|CS_VREDRAW
+	// TODO: remove the transmute once LOC is able to detect this assignment as implicitely valid
+	myWndClass.lpfnWndProc := kernel32.WNDPROC.#trans(Win32WindowProc)
+	myWndClass.hInstance := hInstance
+	myWndClass.lpszClassName := "LOCWindow"
+	
+	if kernel32.RegisterClassEx(&myWndClass) != 0
+		
+		WS_OVERLAPPED :: 0x00000000
+		WS_CAPTION :: 0x00C00000
+		WS_SYSMENU :: 0x00080000
+		WS_THICKFRAME :: 0x00040000
+		WS_MINIMIZEBOX :: 0x00020000
+		WS_MAXIMIZEBOX :: 0x00010000
+		WS_VISIBLE :: 0x10000000
+		WS_OVERLAPPEDWINDOW	:: WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+		
+		CW_USEDEFAULT :: i32.#trans(0x80000000)
+		
+		Window as wint.HWND = kernel32.CreateWindowEx(
+				0,
+				myWndClass.lpszClassName,
+				"Our 1st window in LOC!",
+				WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+				CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+				0,
+				0,
+				hInstance,
+				0 )
+			
+		if Window != 0
+			
+			Running := true
+			
+			XOffset as= 0
+			YOffset as= 0
+			while Running
+				
+				PM_NOREMOVE	:: 0x0000
+				PM_REMOVE	:: 0x0001
+				PM_NOYIELD	:: 0x0002
+				
+				msg as kernel32.MSG = ---
+				while kernel32.PeekMessage(&msg, 0, 0, 0, PM_REMOVE) != 0
+					WM_QUIT :: 0x0012
+					if msg.message == WM_QUIT
+						Running := false
+					_ := kernel32.TranslateMessage(&msg)
+					_ := kernel32.DispatchMessage(&msg)
+					
+				XUSER_MAX_COUNT :: 4
+				ERROR_SUCCESS :: 0
+
+				ControllerIndex as wint.DWORD				
+				while ControllerIndex < XUSER_MAX_COUNT
+					//print_ffstring("Checking XInput at index ")
+					//print_dec64(ControllerIndex, 0, u8(#" "))
+					//print_ffstring("...\n")
+				
+					ControllerState as XINPUT_STATE = ---
+					Marker as u8 = 0x99 // to try and debug IR, and x64 asm... looking for '99h'
+					ErrState as= XInputGetState(ControllerIndex, &ControllerState)
+					if ErrState == ERROR_SUCCESS
+
+						print.print_ffstring("  We have a pad there! \n")
+
+						pad as= &(ControllerState.Gamepad)
+						
+						/*
+						Up as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_DPAD_UP
+						Down as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_DPAD_DOWN
+						Left as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_DPAD_LEFT
+						Right as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_DPAD_RIGHT
+						Start as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_START
+						Back as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_BACK
+						LeftShoulder as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER
+						RightShoulder as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER
+						AButton as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_A
+						BButton as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_B
+						XButton as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_X
+						YButton as bool = 0 != (pad^).wButtons & XINPUT_GAMEPAD_Y
+						*/
+						
+						StickX as= (pad^).sThumbLX
+						StickY as= (pad^).sThumbLY
+						
+						if (pad^).wButtons & XINPUT_GAMEPAD_A != 0
+							
+							YOffset +%= 2
+							
+					else
+						noop
+						//print_ffstring("  XInput Err = ")
+						//print_dec64(ErrState, 0, u8(#" "))
+						//print_ffstring("\n")
+					
+							
+					ControllerIndex += 1
+
+				RenderWeirdGradient(GlobalBackBuffer, XOffset, YOffset)
+				DeviceContext as= kernel32.GetDC(Window)
+				Dimension as= Win32GetWindowDimension(Window)
+				Win32DisplayBufferInWindow(DeviceContext, Dimension.Width, Dimension.Height, GlobalBackBuffer)
+				_ := kernel32.ReleaseDC(Window, DeviceContext)
+				
+				XOffset +%= 1
+			
+		else
+			print_ffstring("Error Creating window\n")
+		
+		
+	else
+		print_ffstring("Error Registering window class\n")
+	
+	/*
+	_ := kernel32.QueryPerformanceCounter(&iPerfCountResult)
+	print.print_ffstring("Perf Count Now = ")
+	print.print_signed_dec64(iPerfCountResult, 0, u8(#" "), false)
+	print.print_ffstring("\n")
+	*/
+	
+	return 1
+
+
+// Entry-Point for the program
+main :: proc () -> int
+	
+	hInstance as wint.HINSTANCE = kernel32.GetModuleHandle(0)
+	theResult as= win32_main(hInstance)	
+	
+	return theResult
+	

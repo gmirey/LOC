@@ -1,0 +1,388 @@
+
+/* ********************************************* *
+ *
+ *	LOC Sample Program
+ *
+ * **********************************************/
+
+print :: #load "print.loc"
+wint :: #load "win_base_types.loc"
+kernel32 :: #load "kernel32.loc"
+
+// " */
+
+k :: #load "demo_kernel.loc"
+using #load "my_first_program.loc"
+
+BytesPerPixel_ :: 4
+
+//---------------------------------------------------
+// Re-creates our color buffer, typically called on resize
+//---------------------------------------------------
+Win32ResizeDIBSection :: proc(Buffer as ^.k.win32_offscreen_buffer, Width as int, Height as int)
+		
+	if (Buffer^.Memory != 0)
+		_ := kernel32.VirtualFree(Buffer^.Memory, 0, kernel32.MEM_RELEASE)
+	
+	BI_RGB :: 0
+	
+	Buffer^.Width := Width
+	Buffer^. Height := Height
+	
+	Buffer^ .Info.bmiHeader.biSize := sizeof(Buffer^.Info.bmiHeader)
+	Buffer ^.Info.bmiHeader.biWidth := Width
+	Buffer^ . Info.bmiHeader.biHeight := -Height
+	Buffer ^. Info.bmiHeader.biPlanes := 1
+	Buffer ^ . Info.bmiHeader.biBitCount := 32
+	Buffer^.Info.bmiHeader.biCompression := BI_RGB
+	
+	Buffer^.BytesPerPixel := BytesPerPixel_
+	Buffer^.Pitch := Buffer^.Width * Buffer^.BytesPerPixel
+		
+	BitmapMemorySize as= Buffer^.Pitch * Buffer^.Height
+	Buffer^.Memory := kernel32.VirtualAlloc(0, BitmapMemorySize, kernel32.MEM_COMMIT, kernel32.PAGE_READWRITE)
+
+WM_CREATE :: 0x0001
+WM_DESTROY :: 0x0002
+WM_MOVE :: 0x0003
+WM_SIZE :: 0x0005
+WM_CLOSE :: 0x0010
+WM_PAINT :: 0x000F
+WM_ACTIVATEAPP :: 0x001C
+WM_MOUSEMOVE :: 0x0200
+WM_LBUTTONDOWN :: 0x0201
+WM_LBUTTONUP :: 0x0202
+WM_LBUTTONDBLCLK :: 0x0203
+WM_RBUTTONDOWN :: 0x0204
+WM_RBUTTONUP :: 0x0205
+WM_RBUTTONDBLCLK :: 0x0206
+WM_MBUTTONDOWN :: 0x0207
+WM_MBUTTONUP :: 0x0208
+WM_MBUTTONDBLCLK :: 0x0209
+WM_MOUSEWHEEL :: 0x020A
+WM_XBUTTONDOWN :: 0x020B
+WM_XBUTTONUP :: 0x020C
+WM_XBUTTONDBLCLK :: 0x020D
+
+WHEEL_DELTA :: 120
+
+testtwodays :: enum u8
+	MONDAY = 1
+	TUESDAY
+
+testenum :: enum u8
+	using testtwodays
+	WEDNESDAY, THURSDAY
+	FRIDAY = 5, SATURDAY = 6, SUNDAY
+	
+my_tuesday :: testenum.TUESDAY
+
+teststruct :: struct
+	a as int
+	b :: 52
+
+//---------------------------------------------------
+// Refresh contents of our color buffer to the window display
+//---------------------------------------------------
+Win32WindowProc :: proc(
+			hWnd as wint.HWND,
+			uMsg as wint.UINT,
+			wParam as wint.WPARAM,
+			lParam as wint.LPARAM) ->
+		wint.LRESULT
+
+	ourResult as wint.LRESULT
+
+	// TODO: convert that if-chain to a switch, once LOC has those.
+	
+	if uMsg == WM_CREATE
+		print.print_ffstring("WM_CREATE\n")
+		
+	elif uMsg == WM_MOUSEMOVE
+		MouseX := i32(i16.#trunc(lParam))
+		MouseY := i32(i16.#trunc(lParam >> 16))		
+		/*
+		print.print_ffstring("MouseMove to (")
+		print.print_signed_dec64(demo.MouseX, 0, u8(#" "), false)
+		print.print_ffstring(", ")
+		print.print_signed_dec64(demo.MouseY, 0, u8(#" "), false)
+		print.print_ffstring(")\n")
+		*/
+		
+		// SetCapture() ReleaseCapture()
+	elif uMsg == WM_LBUTTONDOWN
+		MouseX := i32(i16.#trunc(lParam))
+		MouseY := i32(i16.#trunc(lParam >> 16))
+		_ := kernel32.SetCapture(k.MainWindow)
+		MouseLeftBtn := true
+		MouseLeftJustPressed := true
+
+	elif uMsg == WM_LBUTTONUP
+		MouseX := i32(i16.#trunc(lParam))
+		MouseY := i32(i16.#trunc(lParam >> 16))
+		_ := kernel32.ReleaseCapture()
+		MouseLeftBtn := false
+		MouseLeftJustClicked := true
+
+	elif uMsg == WM_RBUTTONDOWN
+		MouseX := i32(i16.#trunc(lParam))
+		MouseY := i32(i16.#trunc(lParam >> 16))
+		_ := kernel32.SetCapture(k.MainWindow)
+		MouseRightBtn := true
+		MouseRightJustPressed := true
+
+	elif uMsg == WM_RBUTTONUP
+		MouseX := i32(i16.#trunc(lParam))
+		MouseY := i32(i16.#trunc(lParam >> 16))
+		_ := kernel32.ReleaseCapture()
+		MouseRightBtn := false
+		MouseRightJustClicked := true
+
+	elif uMsg == WM_MBUTTONDOWN
+		MouseX := i32(i16.#trunc(lParam))
+		MouseY := i32(i16.#trunc(lParam >> 16))
+		_ := kernel32.SetCapture(k.MainWindow)
+		MouseMiddleBtn := true
+		MouseMiddleJustPressed := true
+		
+	elif uMsg == WM_MBUTTONUP	
+		MouseX := i32(i16.#trunc(lParam))
+		MouseY := i32(i16.#trunc(lParam >> 16))
+		_ := kernel32.ReleaseCapture()
+		MouseMiddleBtn := false
+		MouseMiddleJustClicked := true
+		
+	elif uMsg == WM_MOUSEWHEEL
+		//demo.MouseX := i32(i16.#trunc(lParam))
+		//demo.MouseY := i32(i16.#trunc(lParam >> 16))
+		MouseWheelThisFrame += i16.#trunc(wParam >> 16)
+
+	/*
+	elif uMsg == WM_CAPTURECHANGED
+		noop
+	elif uMsg == WM_MOUSEACTIVATE
+		noop
+	*/
+	
+	elif uMsg == WM_MOVE
+		noop
+		//print.print_ffstring("WM_MOVE\n")
+	
+	elif uMsg == WM_SIZE
+		noop
+		//Dimension as= Win32GetClientDimension(hWnd)
+		//Win32ResizeDIBSection(&GlobalBackBuffer, Dimension.Width, Dimension.Height)
+		
+	/*
+	elif uMsg == WM_PAINT
+		print.print_ffstring("WM_PAINT (noop)\n")
+		/*
+		Paint as kernel32.PAINTSTRUCT = ---
+		DeviceContext as wint.HDC = kernel32.BeginPaint(hWnd, &Paint)
+		
+		if DeviceContext != 0
+		
+			Dimension as= Win32GetClientDimension(hWnd)
+			print.print_ffstring("Painting with client dimensions = (")
+			print.print_signed_dec64(Dimension.Width, 0, u8(#" "), false)
+			print.print_ffstring(", ")
+			print.print_signed_dec64(Dimension.Height, 0, u8(#" "), false)
+			print.print_ffstring(")\n")
+			
+			Win32DisplayBufferInWindow(DeviceContext, Dimension.Width, Dimension.Height, GlobalInfo.DisplayBuffer^)
+
+			_ := kernel32.EndPaint(hWnd, &Paint)
+				
+		else
+			print.print_ffstring("failed BeginPaint...\n")
+		*/
+	*/
+	
+	elif uMsg == WM_CLOSE
+		k.Running := false
+	
+	elif uMsg == WM_DESTROY
+		k.Running := false
+	
+	elif uMsg == WM_ACTIVATEAPP
+		print.print_ffstring("WM_ACTIVATEAPP\n")
+		
+	else
+		ourResult := kernel32.DefWindowProc(hWnd, uMsg, wParam, lParam)
+				
+	return ourResult
+
+// "
+
+FixedWidth :: 1024
+FixedHeight :: 700 
+
+// After entry-point and getting a handle to the current process in windows,
+// This is the 'windows' version of our 'main' proc
+win32_main :: proc (hInstance as wint.HINSTANCE) -> int
+	
+	/*
+	iPerfCountPerSecond as i64
+	_ := kernel32.QueryPerformanceFrequency(&iPerfCountPerSecond)
+
+	print.print_ffstring("Perf Frequency = ")
+	print.print_signed_dec64(iPerfCountPerSecond, 0, u8(#" "), false)
+	print.print_ffstring(" counts/sec\n")
+	
+	iPerfCountResult as i64
+	_ := kernel32.QueryPerformanceCounter(&iPerfCountResult)
+	print.print_ffstring("Perf Count Now = ")
+	print.print_signed_dec64(iPerfCountResult, 0, u8(#" "), false)
+	print.print_ffstring("\n")
+	*/
+	
+	if kernel32.timeBeginPeriod(2) == kernel32.MMSYSERR_NOERROR
+		print.print_ffstring("timeBeginPeriod succeeded\n")
+	else
+		print.print_ffstring("timeBeginPeriod failed\n")
+	
+	myWndClass as kernel32.WNDCLASSEX
+	myWndClass.cbSize := sizeof kernel32.WNDCLASSEX
+
+	CS_BYTEALIGNCLIENT 		:: 0x1000
+	CS_BYTEALIGNWINDOW 		:: 0x2000
+	CS_CLASSDC				:: 0x0040
+	CS_DBLCLKS				:: 0x0008
+	CS_DROPSHADOW			:: 0x00020000
+	CS_GLOBALCLASS			:: 0x4000
+	CS_HREDRAW				:: 0x0002
+	CS_NOCLOSE				:: 0x0200
+	CS_OWNDC				:: 0x0020
+	CS_PARENTDC				:: 0x0080
+	CS_SAVEBITS				:: 0x0800
+	CS_VREDRAW				:: 0x0001
+
+	/*
+	print.print_ffstring("WndClass Styles = 0x")
+	print.print_hex64(CS_OWNDC|CS_HREDRAW|CS_VREDRAW, 4, u8(#"0"))
+	print.print_ffstring("\n")
+	*/
+	
+	myWndClass.style := CS_HREDRAW|CS_VREDRAW
+	myWndClass.lpfnWndProc := kernel32.WNDPROC.#trans(Win32WindowProc) // TODO: remove the transmute once LOC is able to detect this assignment as implicitely valid
+	myWndClass.hInstance := hInstance
+	myWndClass.lpszClassName := "LOCWindow"
+	
+	if kernel32.RegisterClassEx(&myWndClass) != 0
+		
+		/*
+		print.print_ffstring("Successfully registered window class\n")
+		print.print_ffstring("Registered Window proc at 0x")
+		print.print_hex64(r64.#trans(myWndClass.lpfnWndProc), 16, u8(#"0"))
+		print.print_ffstring(" with class name = ")
+		print.print_ffstring((!string).#trans(myWndClass.lpszClassName))
+		print.print_ffstring("\n")
+		*/
+		
+		WS_OVERLAPPED :: 0x00000000
+		WS_CAPTION :: 0x00C00000
+		WS_SYSMENU :: 0x00080000
+		WS_THICKFRAME :: 0x00040000
+		WS_MINIMIZEBOX :: 0x00020000
+		WS_MAXIMIZEBOX :: 0x00010000
+		WS_VISIBLE :: 0x10000000
+		WS_OVERLAPPEDWINDOW	:: WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+		
+		CW_USEDEFAULT :: i32.#trans(0x80000000)
+		
+		Window as wint.HWND = kernel32.CreateWindowEx(
+				0,
+				myWndClass.lpszClassName,
+				"Our 1st window in LOC!",
+				WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+				CW_USEDEFAULT, CW_USEDEFAULT, FixedWidth, FixedHeight,
+				0,
+				0,
+				hInstance,
+				0 )
+			
+		if Window != 0
+			/*
+			print.print_ffstring("Successfully created window\n")
+		
+			_ := kernel32.QueryPerformanceCounter(&iPerfCountResult)
+			print.print_ffstring("Perf Count Now = ")
+			print.print_signed_dec64(iPerfCountResult, 0, u8(#" "), false)
+			print.print_ffstring("\n")
+			*/
+			
+			k.MainWindow := Window
+			
+			if true
+				Dimension as= k.Win32GetClientDimension(Window)
+				print.print_ffstring("Window was created with client dimensions = (")
+				print.print_signed_dec64(Dimension.Width, 0, #" ", false)
+				print.print_ffstring(", ")
+				print.print_signed_dec64(Dimension.Height, 0, #" ", false)
+				print.print_ffstring(")\n")
+				
+				WidthReqMore as= FixedWidth - Dimension.Width
+				HeightReqMore as= FixedHeight - Dimension.Height
+				if WidthReqMore != 0 or HeightReqMore != 0
+					print.print_ffstring("Resizing...\n")
+					_ := kernel32.SetWindowPos(Window, kernel32.HWND_TOP, 0, 0,
+							FixedWidth + WidthReqMore, FixedHeight + HeightReqMore,
+							kernel32.SWP_NOMOVE | kernel32.SWP_NOCOPYBITS)
+			
+			// We'll be running a pseudo-'first' peekmessage loop,
+			// Then we'll be invoking our main demo function, which will initially be set
+			//   to "fake" a slow, sequential draw, by invoking other hidden peekmessageloop during about 300ms
+			//   each time a drawing call is made,
+			// Then we'll fallout from that demo function to a final peekmessage loop which will display last state forever,
+			//   until user closes the window.
+						
+			Win32ResizeDIBSection(&(k.GlobalBuffer), FixedWidth, FixedHeight)
+			
+			if k.LoadBitmap("SanGoku.bmp", &SanGokuImage)
+				print.print_ffstring("Bitmap successfully loaded\n")
+			else
+				print.print_ffstring("Bitmap failed to load\n")
+			
+			k.Running := true
+			while k.Running
+				MouseWheelThisFrame := 0
+				MouseLeftJustPressed := false
+				MouseLeftJustClicked := false
+				MouseRightJustPressed := false
+				MouseRightJustClicked := false
+				MouseMiddleJustPressed := false
+				MouseMiddleJustClicked := false
+
+				k.MsgPumpAndWaitNoRefresh(10)
+				k.SetToBlack(k.GlobalBuffer)
+				DrawMyFirstWindow()
+				DeviceContext as= kernel32.GetDC(k.MainWindow)
+				Dimension as= k.Win32GetClientDimension(k.MainWindow)
+				k.Win32DisplayBufferInWindow(DeviceContext, Dimension.Width, Dimension.Height, k.GlobalBuffer)
+				_ := kernel32.ReleaseDC(k.MainWindow, DeviceContext)
+			
+		else
+			print.print_ffstring("Error Creating window\n")
+		
+		
+	else
+		print.print_ffstring("Error Registering window class\n")
+	
+	/*
+	_ := kernel32.QueryPerformanceCounter(&iPerfCountResult)
+	print.print_ffstring("Perf Count Now = ")
+	print.print_signed_dec64(iPerfCountResult, 0, u8(#" "), false)
+	print.print_ffstring("\n")
+	*/
+	
+	return 1
+
+
+// Entry-Point for the program
+main :: proc () -> int
+	
+	hInstance as wint.HINSTANCE = kernel32.GetModuleHandle(0)
+	theResult as= win32_main(hInstance)	
+	
+	return theResult
+	

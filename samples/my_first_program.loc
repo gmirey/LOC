@@ -1,0 +1,47 @@
+graphics :: #load "demo_graphics.loc"
+k :: #load "demo_kernel.loc"
+
+MouseX as int
+MouseY as int
+
+MouseLeftBtn as bool
+MouseRightBtn as bool
+MouseMiddleBtn as bool
+
+MouseLeftJustPressed as bool
+MouseLeftJustClicked as bool
+MouseRightJustPressed as bool
+MouseRightJustClicked as bool
+MouseMiddleJustPressed as bool
+MouseMiddleJustClicked as bool
+
+MouseWheelThisFrame as int
+
+SanGokuImage as k.Bitmap
+
+DrawMyFirstWindow :: proc()
+
+	graphics.DrawRedRectangle ( 100, 50, 	400, 250 )
+	
+	graphics.DrawRedRectangle ( 120, 100, 	400, 250 )
+	
+	graphics.DrawBlueCircle   ( 700, 200, 	100 )
+
+	graphics.DrawBlueCircle   ( 700, 200, 	200 )
+	
+	graphics.DrawBlueCircle   ( 700, 200, 	300 )
+	
+	graphics.DrawImage 		  ( 50, 200, SanGokuImage )
+	
+	if MouseLeftBtn
+		graphics.DrawBlueCircle   ( 700, 200, 	50 )	
+
+	graphics.DrawSolidRectangle ( 110, 60, 	380, 230, graphics.YELLOW )
+
+	/*
+	graphics.DrawRectangle	  ( MouseX, MouseY, 20, 20, graphics.YELLOW )
+	
+	if MouseLeftBtn
+		graphics.DrawRectangle	  ( MouseX, MouseY, 30, 30, graphics.CYAN )
+	*/
+	

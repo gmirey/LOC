@@ -1,0 +1,484 @@
+
+wint :: #load "win_base_types.loc"
+k32 :: #foreign_source("", "kernel32.dll")
+user32 :: #foreign_source("", "user32.dll")
+gdi32 :: #foreign_source("", "gdi32.dll")
+winmm :: #foreign_source("", "winmm.dll")
+
+ExitProcess :: proc(uExitCode as wint.UINT)						=> #foreign(k32, "ExitProcess")
+
+ExitThread :: proc(dwExitCode as wint.DWORD)					=> #foreign(k32, "ExitThread")
+
+GetCurrentThreadId :: proc() -> wint.DWORD 						=> #foreign(k32, "GetCurrentThreadId")
+
+GetCurrentThread :: proc() -> wint.HANDLE 						=> #foreign(k32, "GetCurrentThread")
+
+GetCurrentProcess :: proc() -> wint.HANDLE 						=> #foreign(k32, "GetCurrentProcess")
+
+LoadLibrary :: proc(lpLibFileName as rawptr) -> wint.HMODULE 	=> #foreign(k32, "LoadLibraryA")
+
+LoadLibraryUtf16 :: proc(lpLibFileName as rawptr /*wint.LPCWSTR*/) ->
+		wint.HMODULE 											=> #foreign(k32, "LoadLibraryW")
+
+FARPROC :: rawptr		// TODO: could we define as an "any function" (??) in the far future ? 
+GetProcAddress :: proc(hModule as wint.HMODULE,
+			lpProcName as rawptr /*wint.LPCSTR*/) ->
+		FARPROC 												=> #foreign(k32, "GetProcAddress")
+
+STD_INPUT_HANDLE :: u32.#trans(-10)
+STD_OUTPUT_HANDLE :: u32.#trans(-11)
+STD_ERROR_HANDLE :: u32.#trans(-12)
+GetStdHandle :: proc(id as wint.DWORD) -> wint.HANDLE 			=> #foreign(k32, "GetStdHandle")
+
+WriteConsole :: proc(
+			hConsoleOutput as wint.HANDLE,
+			lpBuffer as rawptr /*wint.LPCSTR*/,
+			nNumberOfCharsToWrite as wint.DWORD,
+			lpNumberOfCharsWritten as ^.wint.DWORD,
+			lpReserved as rawptr) ->
+		wint.BOOL 												=> #foreign(k32, "WriteConsoleA")
+					 
+WriteConsoleUtf16 :: proc(
+			hConsoleOutput as wint.HANDLE,
+			lpBuffer as rawptr /*wint.LPCWSTR*/,
+			nNumberOfCharsToWrite as wint.DWORD,
+			lpNumberOfCharsWritten as ^.wint.DWORD,
+			lpReserved as rawptr) ->
+		wint.BOOL 												=> #foreign(k32, "WriteConsoleW")
+
+MEM_COMMIT  	:: 0x00001000  
+MEM_RESERVE 	:: 0x00002000  
+
+MEM_DECOMMIT    :: 0x00004000  
+MEM_RELEASE    	:: 0x00008000  
+MEM_FREE		:: 0x00010000  
+
+PAGE_NOACCESS 		   :: 0x01    
+PAGE_READONLY 		   :: 0x02    
+PAGE_READWRITE 		   :: 0x04    
+PAGE_WRITECOPY         :: 0x08    
+PAGE_EXECUTE           :: 0x10    
+PAGE_EXECUTE_READ 	   :: 0x20    
+PAGE_EXECUTE_READWRITE :: 0x40    
+PAGE_EXECUTE_WRITECOPY :: 0x80    
+
+VirtualAlloc :: proc(
+			lpAddress as rawptr,
+			dwSize as wint.SIZE_T,
+			flAllocationType as wint.DWORD,
+			flProtect as wint.DWORD) ->
+		rawptr													=> #foreign(k32, "VirtualAlloc")
+
+VirtualFree :: proc(
+			lpAddress as rawptr,
+			dwSize as wint.SIZE_T,
+			dwFreeType as wint.DWORD) ->
+		wint.BOOL 												=> #foreign(k32, "VirtualFree")
+
+GetModuleHandle :: proc(
+			lpModuleName as rawptr /*wint.LPCSTR*/) ->
+		wint.HMODULE 											=> #foreign(k32, "GetModuleHandleA")
+
+GetModuleHandleUtf16 :: proc(
+			lpModuleName as rawptr /*wint.LPCWSTR*/) ->
+		wint.HMODULE 											=> #foreign(k32, "GetModuleHandleW")
+
+QueryPerformanceFrequency :: proc(
+			lpFrequency as ^.i64 /* [out] LARGE_INTEGER * */) ->
+		wint.BOOL 												=> #foreign(k32, "QueryPerformanceFrequency")
+
+QueryPerformanceCounter :: proc(
+			lpPerformanceCount as ^.i64 /* [out] LARGE_INTEGER * */) ->
+		wint.BOOL 												=> #foreign(k32, "QueryPerformanceCounter")
+
+SECURITY_ATTRIBUTES :: struct
+	nLength as wint.DWORD
+	lpSecurityDescriptor as rawptr
+	bInheritHandle as wint.BOOL
+
+GENERIC_READ :: u32(0x80000000)
+GENERIC_WRITE :: u32(0x40000000)
+GENERIC_EXECUTE :: u32(0x20000000)
+GENERIC_ALL :: u32(0x10000000)
+
+FILE_SHARE_READ :: 0x00000001
+FILE_SHARE_WRITE :: 0x00000002
+FILE_SHARE_DELETE :: 0x00000004
+
+CREATE_NEW :: 1
+CREATE_ALWAYS :: 2
+OPEN_EXISTING :: 3
+OPEN_ALWAYS :: 4
+TRUNCATE_EXISTING :: 5
+
+INVALID_HANDLE_VALUE :: wint.HANDLE.#trans(-1)
+
+CreateFile :: proc(
+			lpFileName as rawptr, /* LPCSTR */
+			dwDesiredAccess as wint.DWORD,
+			dwShareMode as wint.DWORD,
+			lpSecurityAttributes as ^.SECURITY_ATTRIBUTES,
+			dwCreationDisposition as wint.DWORD,
+			dwFlagsAndAttributes as wint.DWORD,
+			hTemplateFile as wint.HANDLE) ->
+		wint.HANDLE												=> #foreign(k32, "CreateFileA")
+
+CreateFileUtf16 :: proc(
+			lpFileName as rawptr, /* LPCWSTR */
+			dwDesiredAccess as wint.DWORD,
+			dwShareMode as wint.DWORD,
+			lpSecurityAttributes as ^.SECURITY_ATTRIBUTES,
+			dwCreationDisposition as wint.DWORD,
+			dwFlagsAndAttributes as wint.DWORD,
+			hTemplateFile as wint.HANDLE) ->
+		wint.HANDLE												=> #foreign(k32, "CreateFileW")
+
+GetFileSizeEx :: proc (
+			hFile as wint.HANDLE,
+			lpFileSize as ^.i64 /* in fact ^.LARGE_INTEGER */ ) ->
+		wint.BOOL												=> #foreign(k32, "GetFileSizeEx")
+
+ReadFile :: proc (
+			hFile as wint.HANDLE,
+			lpBuffer as rawptr,
+			nNumberOfBytesToRead as wint.DWORD,
+			lpNumberOfBytesRead as ^.wint.DWORD,
+			lpOverlapped as rawptr /* in fact ^.OVERLAPPED */ ) ->
+		wint.BOOL 												=> #foreign(k32, "ReadFile")
+
+
+CloseHandle :: proc(hObject as wint.HANDLE) -> wint.BOOL 		=> #foreign(k32, "CloseHandle")
+		
+LPTHREAD_START_ROUTINE :: signature proc(lpParam as rawptr) -> wint.DWORD
+
+CREATE_SUSPENDED :: 0x00000004 // The thread is created in a suspended state, and does not run until the ResumeThread function is called
+STACK_SIZE_PARAM_IS_A_RESERVATION :: 0x00010000 // The dwStackSize parameter specifies the initial reserve size of the stack. If this flag is not specified, dwStackSize specifies the commit size.
+
+CreateThread :: proc(
+			lpThreadAttributes as ^.SECURITY_ATTRIBUTES,
+			dwStackSize as wint.SIZE_T,
+			lpStartAddress as LPTHREAD_START_ROUTINE,
+			lpParameter as rawptr,
+			dwCreationFlags as wint.DWORD,
+			lpThreadIdCreateThread as ^.wint.DWORD) ->
+		wint.HANDLE												=> #foreign(k32, "CreateThread")
+
+INFINITE :: 0xFFFFFFFF
+Sleep :: proc(dwMilliseconds as wint.DWORD) 					=> #foreign(k32, "Sleep")
+
+WNDCLASSEX :: struct
+	cbSize as wint.UINT
+	style as wint.UINT
+	lpfnWndProc as WNDPROC
+	cbClsExtra as i32
+	cbWndExtra as i32
+	hInstance as wint.HINSTANCE
+	hIcon as wint.HICON
+	hCursor as wint.HCURSOR
+	hbrBackground as wint.HBRUSH
+	lpszMenuName as rawptr 		// wint.LPCSTR for WNDCLASSEXA, wint.LPCWSTR for WNDCLASSEXW
+	lpszClassName as rawptr 	// wint.LPCSTR for WNDCLASSEXA, wint.LPCWSTR for WNDCLASSEXW
+	hIconSm as wint.HICON
+
+WNDPROC :: signature proc(
+			hWnd as wint.HWND,
+			uMsg as wint.UINT,
+			wParam as wint.WPARAM,
+			lParam as wint.LPARAM) ->
+		wint.LRESULT
+
+DefWindowProc :: proc(
+			hWnd as wint.HWND,
+			uMsg as wint.UINT,
+			wParam as wint.WPARAM,
+			lParam as wint.LPARAM) ->
+		wint.LRESULT											=> #foreign(user32, "DefWindowProcA")
+
+DefWindowProcUtf16 :: proc(
+			hWnd as wint.HWND,
+			uMsg as wint.UINT,
+			wParam as wint.WPARAM,
+			lParam as wint.LPARAM) ->
+		wint.LRESULT											=> #foreign(user32, "DefWindowProcW")
+
+RegisterClassEx :: proc(
+			pWindowClass as ^.WNDCLASSEX) ->
+		wint.ATOM												=> #foreign(user32, "RegisterClassExA")
+
+RegisterClassExUtf16 :: proc(
+			pWindowClass as ^.WNDCLASSEX) ->
+		wint.ATOM												=> #foreign(user32, "RegisterClassExW")
+		
+CreateWindowEx :: proc(
+			dwExStyle as wint.DWORD,
+			lpClassName as rawptr /*LPCSTR*/,
+			lpWindowName as rawptr /*LPCSTR*/,
+			dwStyle as wint.DWORD,
+			X as i32, Y as i32,
+			nWidth as i32, nHeight as i32,
+			hWndParent as wint.HWND,
+			hMenu as wint.HMENU,
+			hInstance as wint.HINSTANCE,
+			lpParam as rawptr) ->
+		wint.HWND												=> #foreign(user32, "CreateWindowExA")
+
+CreateWindowExUtf16 :: proc(
+			dwExStyle as wint.DWORD,
+			lpClassName as rawptr /*LPCWSTR*/,
+			lpWindowName as rawptr /*LPCWSTR*/,
+			dwStyle as wint.DWORD,
+			X as i32, Y as i32,
+			nWidth as i32, nHeight as i32,
+			hWndParent as wint.HWND,
+			hMenu as wint.HMENU,
+			hInstance as wint.HINSTANCE,
+			lpParam as rawptr) ->
+		wint.HWND												=> #foreign(user32, "CreateWindowExW")
+
+POINT :: struct => x, y as wint.LONG
+
+MSG :: struct
+	hwnd as wint.HWND
+	message as wint.UINT
+	wParam as wint.WPARAM
+	lParam as wint.LPARAM
+	time as wint.DWORD
+	pt as POINT
+	lPrivate as wint.DWORD
+
+GetMessage :: proc(
+			lpMsg as ^.MSG,
+			hWnd as wint.HWND,
+			wMsgFilterMin as wint.UINT,
+			wMsgFilterMax as wint.UINT) ->
+		wint.BOOL												=> #foreign(user32, "GetMessageA")
+
+GetMessageUtf16 :: proc(
+			lpMsg as ^.MSG,
+			hWnd as wint.HWND,
+			wMsgFilterMin as wint.UINT,
+			wMsgFilterMax as wint.UINT) ->
+		wint.BOOL												=> #foreign(user32, "GetMessageW")
+
+PeekMessage :: proc(
+			lpMsg as ^.MSG,
+			hWnd as wint.HWND,
+			wMsgFilterMin as wint.UINT,
+			wMsgFilterMax as wint.UINT,
+			wRemoveMsg as wint.UINT) ->
+		wint.BOOL												=> #foreign(user32, "PeekMessageA")
+
+PM_NOREMOVE	:: 0x0000
+PM_REMOVE	:: 0x0001
+PM_NOYIELD	:: 0x0002
+
+PeekMessageUtf16 :: proc(
+			lpMsg as ^.MSG,
+			hWnd as wint.HWND,
+			wMsgFilterMin as wint.UINT,
+			wMsgFilterMax as wint.UINT,
+			wRemoveMsg as wint.UINT) ->
+		wint.BOOL												=> #foreign(user32, "PeekMessageW")
+
+TranslateMessage :: proc(lpMsg as ^.MSG) -> wint.BOOL			=> #foreign(user32, "TranslateMessage")
+
+DispatchMessage :: proc(lpMsg as ^.MSG) -> wint.LRESULT			=> #foreign(user32, "DispatchMessageA")
+DispatchMessageUtf16 :: proc(lpMsg as ^.MSG) -> wint.LRESULT	=> #foreign(user32, "DispatchMessageW")
+
+PostQuitMessage :: proc(nExitCode as i32)						=> #foreign(user32, "PostQuitMessage")
+
+PostMessage :: proc(
+			hWnd as wint.HWND,
+			Msg as wint.UINT,
+			wParam as wint.WPARAM,
+			lParam as wint.LPARAM) ->
+		wint.BOOL												=> #foreign(user32, "PostMessageA")
+
+PostMessageUtf16 :: proc(
+			hWnd as wint.HWND,
+			Msg as wint.UINT,
+			wParam as wint.WPARAM,
+			lParam as wint.LPARAM) ->
+		wint.BOOL												=> #foreign(user32, "PostMessageW")
+
+SetCapture :: proc(hWnd as wint.HWND) -> wint.HWND 				=> #foreign(user32, "SetCapture")
+
+ReleaseCapture :: proc() -> wint.BOOL 							=> #foreign(user32, "ReleaseCapture")
+
+
+
+RECT :: struct => left, top, right, bottom as wint.LONG
+
+PAINTSTRUCT :: struct
+	hdc as wint.HDC
+	fErase as wint.BOOL
+	rcPaint as RECT
+	fRestore as wint.BOOL
+	fIncUpdate as wint.BOOL
+	rgbReserved as [32]wint.BYTE
+
+BeginPaint :: proc(
+			hWnd as wint.HWND,
+			lpPaint as ^.PAINTSTRUCT) -> 
+		wint.HDC												=> #foreign(user32, "BeginPaint")
+
+EndPaint :: proc(
+			hWnd as wint.HWND,
+			lpPaint as ^.PAINTSTRUCT) -> 
+		wint.BOOL												=> #foreign(user32, "EndPaint")
+
+GetClientRect :: proc(
+			hWnd as wint.HWND,
+			lpRect as ^.RECT) ->
+		wint.BOOL												=> #foreign(user32, "GetClientRect")
+
+GetWindowRect :: proc(
+			hWnd as wint.HWND,
+			lpRect as ^.RECT) ->
+		wint.BOOL												=> #foreign(user32, "GetWindowRect")
+
+HWND_BOTTOM :: wint.HWND.#trans(1)		// Places the window at the bottom of the Z order. If the hWnd parameter identifies a topmost window, the window loses its topmost status and is placed at the bottom of all other windows.
+HWND_NOTOPMOST :: wint.HWND.#trans(-2)	// Places the window above all non-topmost windows (that is, behind all topmost windows). This flag has no effect if the window is already a non-topmost window.
+HWND_TOP :: wint.HWND.#trans(0)			// Places the window at the top of the Z order.
+HWND_TOPMOST :: wint.HWND.#trans(-1)		// Places the window above all non-topmost windows. The window maintains its topmost position even when it is deactivated.
+
+SWP_ASYNCWINDOWPOS 		:: 0x4000 // If the calling thread and the thread that owns the window are attached to different input queues, the system posts the request to the thread that owns the window. This prevents the calling thread from blocking its execution while other threads process the request.
+SWP_DEFERERASE 			:: 0x2000 // Prevents generation of the WM_SYNCPAINT message.
+SWP_DRAWFRAME			:: 0x0020 // Draws a frame (defined in the window's class description) around the window.
+SWP_FRAMECHANGED		:: 0x0020 // Applies new frame styles set using the SetWindowLong function. Sends a WM_NCCALCSIZE message to the window, even if the window's size is not being changed. If this flag is not specified, WM_NCCALCSIZE is sent only when the window's size is being changed.
+SWP_HIDEWINDOW			:: 0x0080 // Hides the window.
+SWP_NOACTIVATE			:: 0x0010 // Does not activate the window. If this flag is not set, the window is activated and moved to the top of either the topmost or non-topmost group (depending on the setting of the hWndInsertAfter parameter).
+SWP_NOCOPYBITS			:: 0x0100 // Discards the entire contents of the client area. If this flag is not specified, the valid contents of the client area are saved and copied back into the client area after the window is sized or repositioned.
+SWP_NOMOVE				:: 0x0002 // Retains the current position (ignores X and Y parameters).
+SWP_NOOWNERZORDER		:: 0x0200 // Does not change the owner window's position in the Z order.
+SWP_NOREDRAW			:: 0x0008 // Does not redraw changes. If this flag is set, no repainting of any kind occurs. This applies to the client area, the nonclient area (including the title bar and scroll bars), and any part of the parent window uncovered as a result of the window being moved. When this flag is set, the application must explicitly invalidate or redraw any parts of the window and parent window that need redrawing.
+SWP_NOREPOSITION		:: 0x0200 // Same as the SWP_NOOWNERZORDER flag.
+SWP_NOSENDCHANGING		:: 0x0400 // Prevents the window from receiving the WM_WINDOWPOSCHANGING message.
+SWP_NOSIZE				:: 0x0001 // Retains the current size (ignores the cx and cy parameters).
+SWP_NOZORDER			:: 0x0004 // Retains the current Z order (ignores the hWndInsertAfter parameter).
+SWP_SHOWWINDOW			:: 0x0040 // Displays the window.
+
+SetWindowPos :: proc(
+			hWnd as wint.HWND,
+			hWndInsertAfter as wint.HWND,
+			X as i32, Y as i32, cx as i32, cy as i32,
+			uFlags as wint.UINT) ->
+		wint.BOOL												=> #foreign(user32, "SetWindowPos")
+
+GetDC :: proc(hWnd as wint.HWND) -> wint.HDC					=> #foreign(user32, "GetDC")
+
+ReleaseDC :: proc(
+			hWnd as wint.HWND,
+			hDC as wint.HDC) ->
+		i32														=> #foreign(user32, "ReleaseDC")
+
+PatBlt :: proc(
+			hdc as wint.HDC,
+			x as i32, y as i32, w as i32, h as i32,
+			rop as wint.DWORD) -> 
+		wint.BOOL												=> #foreign(gdi32, "PatBlt")
+
+HGDIOBJ :: rawptr
+
+HBITMAP :: HGDIOBJ
+
+DeleteObject :: proc(ho as HGDIOBJ) -> wint.BOOL				=> #foreign(gdi32, "DeleteObject")
+
+CreateCompatibleDC :: proc (hdc as wint.HDC) -> wint.HDC 		=> #foreign(gdi32, "CreateCompatibleDC")
+
+BITMAPINFOHEADER :: struct
+	biSize as wint.DWORD
+	biWidth as wint.LONG
+	biHeight as wint.LONG
+	biPlanes as wint.WORD
+	biBitCount as wint.WORD
+	biCompression as wint.DWORD
+	biSizeImage as wint.DWORD
+	biXPelsPerMeter as wint.LONG
+	biYPelsPerMeter as wint.LONG
+	biClrUsed as wint.DWORD
+	biClrImportant as wint.DWORD	
+
+RGBQUAD :: struct => rgbBlue, rgbGreen, rgbRed, rgbReserved as wint.BYTE
+
+BITMAPINFO :: struct
+	bmiHeader as BITMAPINFOHEADER
+	bmiColors as [1]RGBQUAD					// TODO: in fact a trailing array once we have those... but... oh, well, we don't really need it here anyway
+	
+CreateDIBSection :: proc(
+			hdc as wint.HDC,
+			pbmi as ^.BITMAPINFO,
+			usage as wint.UINT,
+			ppvBits as ^.rawptr,
+			hSection as wint.HANDLE,
+			offset as wint.DWORD) ->
+		HBITMAP													=> #foreign(gdi32, "CreateDIBSection")
+	
+StretchDIBits :: proc(
+			hdc as wint.HDC,
+			xDest as i32, yDest as i32, DestWidth as i32, DestHeight as i32,
+			xSrc as i32, ySrc as i32, SrcWidth as i32, SrcHeight as i32,
+			lpBits as rawptr,
+			lpbmi as ^.BITMAPINFO,
+			iUsage as wint.UINT,
+			rop as wint.DWORD) ->
+		i32 													=> #foreign(gdi32, "StretchDIBits")
+
+MMSYSERR_NOERROR :: 0 // part of the MMRESULT enum 
+timeBeginPeriod :: proc(
+			uPeriod as wint.UINT) ->
+		u32 /* in fact MMRESULT */								=> #foreign(winmm, "timeBeginPeriod")
+
+
+
+/*
+
+CloseHandle(hFile);
+
+CreateFileA(szFilePath, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+CreateFileW
+
+MessageBoxA
+MessageBoxW
+
+GetLastError
+
+MultiByteToWideChar
+WideCharToMultiByte
+
+GetFileSizeEx(hFile, &lSize)
+
+ReadFile(hFile, pCurrentWriteStart, TwoGB, &uBytesReadExpect2GB, 0)
+
+
+typedef struct tagPIXELFORMATDESCRIPTOR
+{
+    WORD  nSize;
+    WORD  nVersion;
+    DWORD dwFlags;
+    BYTE  iPixelType;
+    BYTE  cColorBits;
+    BYTE  cRedBits;
+    BYTE  cRedShift;
+    BYTE  cGreenBits;
+    BYTE  cGreenShift;
+    BYTE  cBlueBits;
+    BYTE  cBlueShift;
+    BYTE  cAlphaBits;
+    BYTE  cAlphaShift;
+    BYTE  cAccumBits;
+    BYTE  cAccumRedBits;
+    BYTE  cAccumGreenBits;
+    BYTE  cAccumBlueBits;
+    BYTE  cAccumAlphaBits;
+    BYTE  cDepthBits;
+    BYTE  cStencilBits;
+    BYTE  cAuxBuffers;
+    BYTE  iLayerType;
+    BYTE  bReserved;
+    DWORD dwLayerMask;
+    DWORD dwVisibleMask;
+    DWORD dwDamageMask;
+} PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESCRIPTOR, FAR *LPPIXELFORMATDESCRIPTOR;
+
+*/

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?> 
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Name="ChunkHandle">
+    <DisplayString>{{ uTagged={uTagged}, uTag={uTagged &amp; 0x00000FFFuLL}, ptr={(void*)(uTagged &amp; 0xFFFFFFFFFFFFF000uLL)} }}</DisplayString>
+    <!--
+    <DisplayString>{{ uTagged={(unsigned char)(_uValue &gt;&gt; 59)}, X={((unsigned int)_uValue) &amp; 0x1FFFFFFFu}, Y={((unsigned int)(_uValue &gt;&gt; 29)) &amp; 0x1FFFFFFFu} }}</DisplayString>
+    -->
+  </Type>
+  <Type Name="ArrayView&lt;*&gt;">
+	<DisplayString>{{ size={_impl._uSize} capacity={_impl.uAllocSize / sizeof($T1)} isStatic={(int)(reinterpret_cast<uintptr_t>(_impl.pCurrentBase) &amp; ~uintptr_t(1u))}}}</DisplayString>
+	  <Expand>
+		<ArrayItems>
+		  <Size>_impl._uSize</Size>
+		  <ValuePointer>reinterpret_cast<$T1*>(reinterpret_cast<uintptr_t>(_impl.pCurrentBase) &amp; ~uintptr_t(1u))</ValuePointer>
+	    </ArrayItems>
+	</Expand>
+  </Type>
+  <Type Name="FFString">
+	<DisplayString>{pStart}</DisplayString>
+	<StringView>pStart</StringView>
+  </Type>
+  <Type Name="StringView">
+	<DisplayString>{start,[len]uByteLength}</DisplayString>
+	<StringView>start,[len]uByteLength</StringView>
+  </Type>
+
+</AutoVisualizer>

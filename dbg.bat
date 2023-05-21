@@ -1,0 +1,1 @@
+devenv build\loc.exe

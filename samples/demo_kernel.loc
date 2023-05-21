@@ -1,0 +1,432 @@
+
+print :: #load "print.loc"
+wint :: #load "win_base_types.loc"
+kernel32 :: #load "kernel32.loc"
+
+SRCCOPY 	:: wint.DWORD(0x00CC0020) /* dest = source                   */
+SRCPAINT 	:: wint.DWORD(0x00EE0086) /* dest = source OR dest           */
+SRCAND 		:: wint.DWORD(0x008800C6) /* dest = source AND dest          */
+SRCINVERT 	:: wint.DWORD(0x00660046) /* dest = source XOR dest          */
+SRCERASE 	:: wint.DWORD(0x00440328) /* dest = source AND (NOT dest )   */
+NOTSRCCOPY 	:: wint.DWORD(0x00330008) /* dest = (NOT source)             */
+NOTSRCERASE :: wint.DWORD(0x001100A6) /* dest = (NOT src) AND (NOT dest) */
+MERGECOPY 	:: wint.DWORD(0x00C000CA) /* dest = (source AND pattern)     */
+MERGEPAINT 	:: wint.DWORD(0x00BB0226) /* dest = (NOT source) OR dest     */
+PATCOPY 	:: wint.DWORD(0x00F00021) /* dest = pattern                  */
+PATPAINT 	:: wint.DWORD(0x00FB0A09) /* dest = DPSnoo                   */
+PATINVERT 	:: wint.DWORD(0x005A0049) /* dest = pattern XOR dest         */
+DSTINVERT 	:: wint.DWORD(0x00550009) /* dest = (NOT dest)               */
+BLACKNESS 	:: wint.DWORD(0x00000042) /* dest = BLACK                    */
+WHITENESS 	:: wint.DWORD(0x00FF0062) /* dest = WHITE                    */
+
+win32_offscreen_buffer :: struct	
+	Info as kernel32.BITMAPINFO
+	Memory as rawptr
+	Width as int
+	Height as int
+	Pitch as int
+	BytesPerPixel as int
+	
+Running as bool
+GlobalBuffer as win32_offscreen_buffer
+MainWindow as wint.HWND
+
+SetToBlack :: proc(Buffer as win32_offscreen_buffer)
+	Row as= u8.#ptr(Buffer.Memory)
+	Y as int
+	while Y < Buffer.Height
+		Pixel as= u32.#ptr(Row)
+		X as int
+		while X < Buffer.Width
+			Pixel^ := 0
+			Pixel += 1
+			X += 1
+		Row += Buffer.Pitch
+		Y += 1	
+		
+
+DIB_RGB_COLORS :: 0
+		
+//---------------------------------------------------
+// Refresh contents of our color buffer to the window display
+//---------------------------------------------------
+Win32DisplayBufferInWindow :: proc(
+		DeviceContext as wint.HDC, WindowWidth as int, WindowHeight as int,
+		Buffer as win32_offscreen_buffer)
+
+	//print.print_ffstring("Blitting to window DC, from mem = 0x")
+	//print.print_hex64(Buffer.Memory, 16, u8(#"0"))
+	//print.print_ffstring("\n")
+
+	CountLines as= kernel32.StretchDIBits(DeviceContext,
+								0, 0, WindowWidth, WindowHeight,
+								0, 0, Buffer.Width, Buffer.Height,
+								Buffer.Memory,
+								&Buffer.Info,
+								DIB_RGB_COLORS, SRCCOPY)
+
+	if CountLines == 0
+		print.print_ffstring("*** StretchDIBits produced nothing...\n")
+
+		
+win32_window_dimension :: struct =>	Width, Height as int
+
+
+Win32GetClientDimension :: proc(Window as wint.HWND) -> win32_window_dimension
+	result as win32_window_dimension = --- // TODO: use a named return instead of this...
+	ClientRect as kernel32.RECT = ---
+	_ := kernel32.GetClientRect(Window, &ClientRect)
+	result.Width := ClientRect.right - ClientRect.left
+	result.Height := ClientRect.bottom - ClientRect.top
+	return result // TODO: a bare version of return when already assigned, once we have those ?
+
+
+Win32GetWindowDimension :: proc(Window as wint.HWND) -> win32_window_dimension
+	result as win32_window_dimension = --- // TODO: use a named return instead of this...
+	WindowRect as kernel32.RECT = ---
+	_ := kernel32.GetWindowRect(Window, &WindowRect)
+	result.Width := WindowRect.right - WindowRect.left
+	result.Height := WindowRect.bottom - WindowRect.top
+	return result // TODO: a bare version of return when already assigned, once we have those ?
+
+MsgPumpAndWaitNoRefresh :: proc(timeoutMs as u32)
+	elapsedMs as u32 = 0
+	while Running
+	
+		msg as kernel32.MSG = ---
+		while kernel32.PeekMessage(&msg, 0, 0, 0, kernel32.PM_REMOVE) != 0
+			WM_QUIT :: 0x0012
+			if msg.message == WM_QUIT
+				Running := false
+			_ := kernel32.TranslateMessage(&msg)
+			_ := kernel32.DispatchMessage(&msg)
+			
+		kernel32.Sleep(14)
+		elapsedMs += 14		// TODO : really time this instead of this estimation
+	
+		if elapsedMs >= timeoutMs
+			return
+			
+MsgPumpAndWait :: proc(timeoutMs as u32)
+
+	//print.print_ffstring("Msg Pump and Wait Starting for ")
+	//print.print_dec64(timeoutMs, 0, u8(#" "))
+	//print.print_ffstring(" ms\n")
+	
+	elapsedMs as u32 = 0
+	while Running
+	
+		msg as kernel32.MSG = ---
+		while kernel32.PeekMessage(&msg, 0, 0, 0, kernel32.PM_REMOVE) != 0
+			WM_QUIT :: 0x0012
+			if msg.message == WM_QUIT
+				Running := false
+			_ := kernel32.TranslateMessage(&msg)
+			_ := kernel32.DispatchMessage(&msg)
+	
+		//print.print_ffstring("Msg Pump loop ")
+		//print.print_dec64(elapsedMs, 0, u8(#" "))
+		//print.print_ffstring(" ms so far : ")
+	
+		DeviceContext as= kernel32.GetDC(MainWindow)
+		Dimension as= Win32GetClientDimension(MainWindow)
+		Win32DisplayBufferInWindow(DeviceContext, Dimension.Width, Dimension.Height, GlobalBuffer)
+		_ := kernel32.ReleaseDC(MainWindow, DeviceContext)
+		
+		kernel32.Sleep(14)
+		elapsedMs += 14		// TODO : really time this instead of this estimation
+	
+		if elapsedMs >= timeoutMs
+			//print.print_ffstring("<-- Done waiting\n")
+			return
+
+DrawHorizLineTo :: proc (Buffer as win32_offscreen_buffer, Left as int, Right as int, Y as int, ColorBGRA as u32)
+	if Y >= 0 and Y < Buffer.Height
+		TrueLeft as= Left
+		TrueRight as= Right
+		if TrueLeft > TrueRight
+			TrueLeft := Right
+			TrueRight := Left
+		if TrueLeft < Buffer.Width and TrueRight > 0
+			if TrueLeft < 0
+				TrueLeft := 0
+			if TrueRight >= Buffer.Width
+				TrueRight := Buffer.Width - 1
+			Row as= u8.#ptr(Buffer.Memory) + Buffer.Pitch * Y
+			Pixel as= u32.#ptr(Row) + Left
+			X as= TrueLeft
+			while X <= TrueRight
+				Pixel^ := ColorBGRA
+				Pixel += 1
+				X += 1
+
+DrawVertiLineTo :: proc (Buffer as win32_offscreen_buffer, Top as int, Bottom as int, X as int, ColorBGRA as u32)
+	if X >= 0 and X < Buffer.Width
+		TrueTop as= Top
+		TrueBottom as= Bottom
+		if TrueTop > TrueBottom
+			TrueTop := Bottom
+			TrueBottom := Top
+		if TrueTop < Buffer.Height and TrueBottom > 0
+			if TrueTop < 0
+				TrueTop := 0
+			if TrueBottom >= Buffer.Height
+				TrueBottom := Buffer.Height - 1
+			FirstRow as= u8.#ptr(Buffer.Memory) + Buffer.Pitch * TrueTop
+			Pixel as= u32.#ptr(FirstRow) + X
+			Y as= TrueTop
+			while Y <= TrueBottom
+				Pixel^ := ColorBGRA
+				Pixel := u32.#ptr(u8.#ptr(Pixel) + Buffer.Pitch)
+				Y += 1
+
+DrawRectangleTo :: proc (Buffer as win32_offscreen_buffer, Left as int, Top as int, Width as int, Height as int, ColorBGRA as u32)
+	DrawHorizLineTo(Buffer, Left, Left+Width, Top, ColorBGRA)
+	DrawHorizLineTo(Buffer, Left, Left+Width, Top+Height, ColorBGRA)
+	DrawVertiLineTo(Buffer, Top, Top+Height, Left, ColorBGRA)
+	DrawVertiLineTo(Buffer, Top, Top+Height, Left+Width, ColorBGRA)
+
+	
+DrawCircleTo :: proc (Buffer as win32_offscreen_buffer, CenterX as int, CenterY as int, Radius as int, ColorBGRA as u32)
+	AbsRadius as= Radius
+	if AbsRadius < 0
+		AbsRadius := -Radius
+	RadiusAndOne as= AbsRadius + 1
+	RadiusAndOneSq as= RadiusAndOne * RadiusAndOne
+	//print.print_ffstring("Drawing a circle\n")
+	XMore as= Radius
+	YMore as= 0
+	CenterPtr as= u8.#ptr(Buffer.Memory) + (Buffer.Pitch * CenterY + Buffer.BytesPerPixel * CenterX)
+	while true
+		//print.print_ffstring("Point at (")
+		//print.print_signed_dec64(CenterX + XMore, 0, u8(#" "), false)
+		//print.print_ffstring(" ; ")
+		//print.print_signed_dec64(CenterY + YMore, 0, u8(#" "), false)
+		//print.print_ffstring(")\n")
+		if CenterY - XMore < Buffer.Height
+			RowPtrAboveInv as= CenterPtr - (Buffer.Pitch * XMore)
+			if CenterY - YMore < Buffer.Height
+				RowPtrAbove as= CenterPtr - (Buffer.Pitch * YMore)
+				if CenterY + YMore < Buffer.Height
+					RowPtrBelow as= CenterPtr + (Buffer.Pitch * YMore)
+					if CenterY + XMore < Buffer.Height
+						RowPtrBelowInv as= CenterPtr + (Buffer.Pitch * XMore)
+						if CenterY + XMore >= 0
+							if (CenterX - YMore >= 0) and (CenterX - YMore < Buffer.Width)
+								PixelLeft as= u32.#ptr(RowPtrBelowInv) - YMore
+								PixelLeft^ := ColorBGRA
+							if (CenterX + YMore >= 0) and (CenterX + YMore < Buffer.Width)
+								PixelRight as= u32.#ptr(RowPtrBelowInv) + YMore
+								PixelRight^ := ColorBGRA
+					if CenterY + YMore >= 0
+						if (CenterX - XMore >= 0) and (CenterX - XMore < Buffer.Width)
+							PixelLeft as= u32.#ptr(RowPtrBelow) - XMore
+							PixelLeft^ := ColorBGRA
+						if (CenterX + XMore >= 0) and (CenterX + XMore < Buffer.Width)
+							PixelRight as= u32.#ptr(RowPtrBelow) + XMore
+							PixelRight^ := ColorBGRA
+				if CenterY - YMore >= 0
+					if (CenterX - XMore >= 0) and (CenterX - XMore < Buffer.Width)
+						PixelLeft as= u32.#ptr(RowPtrAbove) - XMore
+						PixelLeft^ := ColorBGRA
+					if (CenterX + XMore >= 0) and (CenterX + XMore < Buffer.Width)
+						PixelRight as= u32.#ptr(RowPtrAbove) + XMore
+						PixelRight^ := ColorBGRA
+			if CenterY - XMore >= 0
+				if (CenterX - YMore >= 0) and (CenterX - YMore < Buffer.Width)
+					PixelLeft as= u32.#ptr(RowPtrAboveInv) - YMore
+					PixelLeft^ := ColorBGRA
+				if (CenterX + YMore >= 0) and (CenterX + YMore < Buffer.Width)
+					PixelRight as= u32.#ptr(RowPtrAboveInv) + YMore
+					PixelRight^ := ColorBGRA
+
+		YMore += 1
+		SqNow as= YMore*YMore + XMore*XMore
+		if SqNow >= RadiusAndOneSq
+			//print.print_ffstring("Decrementing X\n")
+			XMore -= 1
+			if XMore < YMore
+				return		
+
+DrawSolidRectangleTo :: proc (Buffer as win32_offscreen_buffer, Left as int, Top as int, Width as int, Height as int, ColorBGRA as u32)
+	TrueLeft as= Left
+	TrueTop as= Top
+	TrueRight as= Left + Width - 1
+	TrueBottom as= Top + Height - 1
+	XOffset as= 0
+	YOffset as= 0
+	
+	if TrueLeft < 0
+		XOffset := -TrueLeft
+		TrueLeft := 0
+		if XOffset >= Width
+			return
+		
+	if TrueTop < 0
+		YOffset := -TrueTop
+		TrueTop := 0
+		if YOffset >= Height
+			return
+			
+	if TrueRight >= Buffer.Width
+		TrueRight := Buffer.Width - 1
+		
+	if TrueBottom >= Buffer.Height
+		TrueBottom := Buffer.Height - 1
+	
+	Y as= TrueTop
+	Row as= u8.#ptr(Buffer.Memory) + Buffer.Pitch * Y
+	while Y <= TrueBottom
+		X as= TrueLeft
+		Pixel as= u32.#ptr(Row) + X
+		while X <= TrueRight
+			Pixel^ := ColorBGRA
+			Pixel += 1
+			X += 1
+		Row += Buffer.Pitch
+		Y += 1
+		
+ReadFileEntirely :: proc(FileName as !string, ByteSize as ^.u64) -> rawptr
+	hFile as= kernel32.CreateFile(FileName.ptr_to_bytes, kernel32.GENERIC_READ, kernel32.FILE_SHARE_READ, 0, kernel32.OPEN_EXISTING, 0, 0)
+	if hFile != kernel32.INVALID_HANDLE_VALUE
+		lSize as i64
+		if kernel32.GetFileSizeEx(hFile, &lSize) != wint.BOOL(0) and lSize > 0
+			ByteSize^ := u64(lSize)
+			if lSize >= 0x1_0000_0000 // TODO: currently only allows DWORD "read" there => iterate through the i64 size if needed...
+				print.print_ffstring("File '")
+				print.print_ffstring(FileName)
+				print.print_ffstring("' is too large (")
+				print.print_signed_dec64(lSize, 0, #" ", false)
+				print.print_ffstring(" bytes)\n")
+				return 0
+			uSize32 as= u32(lSize)
+			pResult as= kernel32.VirtualAlloc(0, lSize, kernel32.MEM_COMMIT, kernel32.PAGE_READWRITE)
+			if pResult != 0
+				uActualReadBytesCount as u32
+				if kernel32.ReadFile(hFile, pResult, uSize32, &uActualReadBytesCount, 0) == wint.BOOL(0) or uActualReadBytesCount != uSize32
+					_ := kernel32.VirtualFree(pResult, 0, kernel32.MEM_RELEASE)
+					print.print_ffstring("File '")
+					print.print_ffstring(FileName)
+					print.print_ffstring("' failed read (")
+					print.print_signed_dec64(lSize, 0, #" ", false)
+					print.print_ffstring(" bytes)\n")
+					return 0
+				print.print_ffstring("File read '")
+				print.print_ffstring(FileName)
+				print.print_ffstring("' succeeded, ")
+				print.print_signed_dec64(lSize, 0, #" ", false)
+				print.print_ffstring(" bytes fully read\n")
+				return pResult
+
+			print.print_ffstring("Failed alloc for File '")
+			print.print_ffstring(FileName)
+			print.print_ffstring("' required ")
+			print.print_signed_dec64(lSize, 0, #" ", false)
+			print.print_ffstring(" bytes)\n")
+			return 0
+
+		print.print_ffstring("File '")
+		print.print_ffstring(FileName)
+		print.print_ffstring("' was empty, or getsize failed\n")
+		ByteSize^ := 0
+		return 0			
+			
+	else
+		print.print_ffstring("Could not open File '")
+		print.print_ffstring(FileName)
+		print.print_ffstring("'\n")
+		ByteSize^ := 0
+		return 0
+
+
+Bitmap :: struct
+	Width as u32
+	Height as u32
+	Pixels as ^.u32
+
+BMPHeaderAfterTwoBytes :: struct 
+	FileSize as u32
+	Reserved1 as u16
+	Reserved2 as u16
+	BitmapOffset as u32
+	Size as u32
+	Width as u32
+	Height as u32
+	Planes as u16
+	BitsPerPixel as u16
+
+LoadBitmap :: proc (BitmapFileName as !string, OutImage as ^.Bitmap) -> bool
+	uFileSize as u64
+	pFileContents as= ReadFileEntirely(BitmapFileName, &uFileSize)
+	if pFileContents == 0 or uFileSize == 0
+		print.print_ffstring("LoadBitmap : failed to load\n")
+		return false
+	if uFileSize >= 0x8000_0000
+		print.print_ffstring("LoadBitmap : file too large for using it as bitmap\n")
+		return false
+	uExpectBmp as= u16.#ptr(pFileContents)^
+	if uExpectBmp != 19778 
+		print.print_ffstring("LoadBitmap : invalid file tag\n")
+	pHeaderAfterTwoBytes as= BMPHeaderAfterTwoBytes.#ptr(pFileContents + 2)
+	print.print_ffstring("LoadBitmap : loaded with size ")
+	print.print_dec64(u64(pHeaderAfterTwoBytes^.Width), 0, #" ")
+	print.print_ffstring("x")
+	print.print_dec64(u64(pHeaderAfterTwoBytes^.Height), 0, #" ")
+	
+	// TODO !!
+	Marker as i32 = 0x99
+		// TODO: debug this !!! printing from (pHeaderAfterTwoBytes^).BitsPerPixel seems to crash
+	print.print_ffstring(", ")	
+	print.print_dec64(u64(pHeaderAfterTwoBytes^.BitsPerPixel), 0, #" ")
+	print.print_ffstring(" bpp\n")
+	
+	print.print_ffstring("\n")
+	OutImage^.Width := pHeaderAfterTwoBytes^.Width
+	OutImage^.Height := pHeaderAfterTwoBytes^.Height
+	OutImage^.Pixels := u32.#ptr(pFileContents + pHeaderAfterTwoBytes^.BitmapOffset)
+	return true
+
+DrawBitmapTo :: proc (Buffer as win32_offscreen_buffer, Left as int, Top as int, TheBitmap as Bitmap)
+
+	TrueLeft as= Left
+	TrueTop as= Top
+	TrueRight as= Left + int(TheBitmap.Width) - 1
+	TrueBottom as= Top + int(TheBitmap.Height) - 1
+	XOffset as= 0
+	YOffset as= 0
+	
+	if TrueLeft < 0
+		XOffset := -TrueLeft
+		TrueLeft := 0
+		if XOffset >= int(TheBitmap.Width)
+			return
+		
+	if TrueTop < 0
+		YOffset := -TrueTop
+		TrueTop := 0
+		if YOffset >= int(TheBitmap.Height)
+			return
+			
+	if TrueRight >= Buffer.Width
+		TrueRight := Buffer.Width - 1
+		
+	if TrueBottom >= Buffer.Height
+		TrueBottom := Buffer.Height - 1
+	
+	Y as= TrueBottom
+	Row as= Buffer.Memory + Buffer.Pitch * Y
+	SrcRow as= TheBitmap.Pixels + int(TheBitmap.Width) * YOffset
+	while Y >= TrueTop
+		X as= TrueLeft
+		Pixel as= u32.#ptr(Row) + X
+		SrcPix as= SrcRow + XOffset
+		while X <= TrueRight
+			Pixel^ := SrcPix^
+			Pixel += 1
+			SrcPix += 1
+			X += 1
+		Row -= Buffer.Pitch
+		SrcRow += int(TheBitmap.Width)
+		Y -= 1
+
+	
