@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_IR_H_
@@ -21,6 +36,7 @@
 #include "LocLib_IR_Types.h"
 #include "LocLib_IR_Solver.h"
 
+// Deals with one or several emitted 'IRIT_GOTO' or 'IRIT_BRANCH', once their target IR-position (expected an IRIT_MARKER_JUMP_TARGER) is known
 local_func void do_replace_jump_placeholders_to(u32 uInstrIndex, ArrayView<u32>& vecPlaceholders, IRRepo* pRepo, CompilationContext* pEvalContext)
 {
     Assert_(uInstrIndex < pRepo->uSize);
@@ -42,6 +58,7 @@ local_func void do_replace_jump_placeholders_to(u32 uInstrIndex, ArrayView<u32>&
     }
 }
 
+// could be useful ? TODO: CLEANUP
 local_func_inl void ir_erase_entry_with_noop(IRRepo* pRepo, u32 uEntryPos)
 {
     IREntry& entryToErase = ir_access_repo_instr(pRepo, uEntryPos);
@@ -50,6 +67,7 @@ local_func_inl void ir_erase_entry_with_noop(IRRepo* pRepo, u32 uEntryPos)
     entryToErase.metaValue._payload = 0uLL;
 }
 
+// generic emit_entry, blindly, with the provided parameters. returns position (where appended) in provided repo
 local_func_inl u32 ir_emit_entry(IRRepo* pRepo, IRInstructionType eIRIT, u32 uInstrFlags, u8 uFormat,
     u64 uFirstParam, u64 uSecondParam, u32 uMetaFlags, MetaValueIR metaValue, WorkerDesc* pWorker)
 {
@@ -69,6 +87,7 @@ local_func_inl u32 ir_emit_entry(IRRepo* pRepo, IRInstructionType eIRIT, u32 uIn
     return uPos;
 }
 
+// a jump-target emission. Jump-targets shall be the only IR on the position of which we're allowed to IRIT_GOTO or IRIT_BRANCH.
 local_func u32 ir_emit_marker_jump_target(IRRepo* pRepo, CompilationContext* pEvalContext, u8 uPathColdness = 0u)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
@@ -76,6 +95,7 @@ local_func u32 ir_emit_marker_jump_target(IRRepo* pRepo, CompilationContext* pEv
     return ir_emit_entry(pRepo, IRIT_MARKER_JUMP_TARGET, u32(uPathColdness<<8), 0u, 0uLL, 0uLL, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// enums for flagging the *reason* of a jump emission, in the (premature?-)hope that we may use that info during IR optims
 enum EBranchKind : u8 {
     BRANCH_TAKEN_UNKNOWN,               // TC did not specify branch-kind.
 
@@ -142,6 +162,7 @@ enum EBranchKind : u8 {
     BRANCH_TAKEN_OUT_EDGELOOP_BEFORE,
     */
 
+// emission of IRIT_GOTO, when already known where to
 local_func u32 ir_emit_goto(u32 uInstrIndex, IRRepo* pRepo, CompilationContext* pEvalContext,
     EBranchKind eBranchKind = EBranchKind::BRANCH_TAKEN_UNKNOWN)
 {
@@ -155,6 +176,7 @@ local_func u32 ir_emit_goto(u32 uInstrIndex, IRRepo* pRepo, CompilationContext* 
     return ir_emit_entry(pRepo, IRIT_GOTO, 0u, 0u, 0uLL, uAsSecondParam, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// emission of IRIT_GOTO, when we don't yet know where to jump exactly. Typically used together with an 'ArrayView<u32> vecPlaceholders'
 local_func u32 ir_emit_goto_placeholder(IRRepo* pRepo, CompilationContext* pEvalContext,
     EBranchKind eBranchKind = EBranchKind::BRANCH_TAKEN_UNKNOWN)
 {
@@ -167,6 +189,7 @@ local_func u32 ir_emit_goto_placeholder(IRRepo* pRepo, CompilationContext* pEval
     return ir_emit_entry(pRepo, IRIT_GOTO, 0u, 0u, 0uLL, uAsSecondParam, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// emission of IRIT_SETZERO
 local_func u32 ir_emit_reset_to_zero(u64 uVarToResetToZero, u8 uFormat, u64 uIRofSlotCount,
     IRRepo* pRepo, CompilationContext* pEvalContext)
 {
@@ -175,7 +198,7 @@ local_func u32 ir_emit_reset_to_zero(u64 uVarToResetToZero, u8 uFormat, u64 uIRo
     return ir_emit_entry(pRepo, IRIT_SETZERO, 0u, uFormat, uVarToResetToZero, uIRofSlotCount, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
-
+// For debugging purposes...
 local_func void _ir_emit_param_repr_to(char* pBuffer, u64 uIRParam, u8 uFormat, u32 uSlotsCount) {
     Assert_(ir_is_valid_param(uIRParam));
     if (ir_is_numeric_immediate(uIRParam)) {
@@ -245,6 +268,7 @@ local_func void _ir_emit_param_repr_to(char* pBuffer, u64 uIRParam, u8 uFormat, 
     }
 }
 
+// emission of an IRIT_BRANCH, when we don't yet know where to jump exactly. Typically used together with an 'ArrayView<u32> vecPlaceholders'
 local_func u32 ir_emit_branch_placeholder(u64 uIRParam, u8 uFormat, u32 uWhenNonZeroFlag, IRRepo* pRepo, CompilationContext* pEvalContext,
     EBranchKind eBranchKind = EBranchKind::BRANCH_TAKEN_UNKNOWN)
 {
@@ -259,6 +283,7 @@ local_func u32 ir_emit_branch_placeholder(u64 uIRParam, u8 uFormat, u32 uWhenNon
     return ir_emit_entry(pRepo, IRIT_BRANCH, uWhenNonZeroFlag, uFormat, uIRParam, uAsSecondParam, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// emission of an IRIT_LOCAL_VAR_DECL
 local_func u32 ir_emit_local_variable_decl(u8 uFormat, u32 uAlignPow2, u32 uSlotsCount, u32 uInstrFlags,
                                            IRRepo* pRepo, CompilationContext* pEvalContext)
 {
@@ -269,16 +294,19 @@ local_func u32 ir_emit_local_variable_decl(u8 uFormat, u32 uAlignPow2, u32 uSlot
     return ir_emit_entry(pRepo, IRIT_LOCAL_VAR_DECL, 0u, uFormat, 0uLL, uAsSecondParam, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// emission of an IRIT_RET
 local_func u32 ir_emit_return(IRRepo* pRepo, CompilationContext* pEvalContext)
 {
     return ir_emit_entry(pRepo, IRIT_RET, 0u, 0u, 0uLL, 0uLL, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// emission of an IRIT_MARKER_START_SOURCE_SCOPE
 local_func u32 ir_emit_marker_start_scope(IRRepo* pRepo, CompilationContext* pEvalContext)
 {
     return ir_emit_entry(pRepo, IRIT_MARKER_START_SOURCE_SCOPE, 0u, 0u, 0uLL, 0uLL, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// emission of an IRIT_MARKER_END_SOURCE_SCOPE
 local_func u32 ir_emit_marker_end_scope(u32 uIRPosOfScopeStart, IRRepo* pRepo, CompilationContext* pEvalContext)
 {
     Assert_(uIRPosOfScopeStart < pRepo->uSize);
@@ -287,6 +315,7 @@ local_func u32 ir_emit_marker_end_scope(u32 uIRPosOfScopeStart, IRRepo* pRepo, C
     return ir_emit_entry(pRepo, IRIT_MARKER_END_SOURCE_SCOPE, 0u, 0u, uAsFirstParam, 0uLL, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
+// emission of an IRIT_CALL - Single-'line', no in or out params provided at this point.
 local_func u32 ir_emit_proccall(u64 uIRofProc, u8 uInParamsCount, u8 uOutParamsCount, u8 uImplicitTrailingParams,
     u8 uCallConv, u8 bCallIsTail, IRRepo* pRepo, CompilationContext* pEvalContext)
 {
@@ -302,7 +331,7 @@ local_func u32 ir_emit_proccall(u64 uIRofProc, u8 uInParamsCount, u8 uOutParamsC
     return ir_emit_entry(pRepo, IRIT_CALL, 0u, uCallConv, uIRofProc, uAsSecondParam, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
-// TODO: cannot pass params with align > 128 bytes by value
+// emission of an 'input' param (IRIT_CALLER_IN_PARAM) - typically *after* emission of an associated IRIT_CALL
 local_func u32 ir_emit_proc_param_on_caller_side(u64 uIRofParamValue, u8 uFormat, u32 uSlotsCount, u32 uAlignLog2,
     IRRepo* pRepo, CompilationContext* pEvalContext)
 {
@@ -312,7 +341,8 @@ local_func u32 ir_emit_proc_param_on_caller_side(u64 uIRofParamValue, u8 uFormat
     return ir_emit_entry(pRepo, IRIT_CALLER_IN_PARAM, 0u, uFormat, uIRofParamValue, uAsSecondParam, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
 
-// TODO: cannot pass params with align > 128 bytes by value
+// emission of an 'output' param (IRIT_CALLER_RET_PARAM) - typically *after* emission of an associated IRIT_CALL.
+// Also used after emission of a few IR codes with possible additional ret values.
 local_func u32 ir_emit_proc_result_on_caller_side(u32 uProcCallIRPos, u8 uFormat, u32 uSlotsCount, u32 uAlignLog2,
     IRRepo* pRepo, CompilationContext* pEvalContext)
 {
@@ -323,6 +353,10 @@ local_func u32 ir_emit_proc_result_on_caller_side(u32 uProcCallIRPos, u8 uFormat
     u64 uAsSecondParam = uSlotsAndAlign << IR_STD_PARAM_SHIFT;
     return ir_emit_entry(pRepo, IRIT_CALLER_RET_PARAM, 0u, uFormat, uAsFirstPAram, uAsSecondParam, 0u, MetaValueIR{}, pEvalContext->pWorker);
 }
+
+//
+// TODO: consistently have an 'emit' func here for *ALL* IRIT ? atm many are directly emitted, eg. in LocLib_IR_SolverInterface.h
+//
 
 #endif // LOCLIB_IR_H_
 

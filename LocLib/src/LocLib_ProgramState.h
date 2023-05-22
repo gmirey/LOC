@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_PROGRAM_STATE_H_
@@ -243,96 +258,6 @@ struct WholeProgramCompilationState {
 
 };
 
-/*
-local_func bool ir_is_non_imm_referencing_global_variable(u64 uParam, IRAwareContext* pIRCtx, SourceFileDescAndState** outSourceFile, ValueBinding** outBinding) {
-    Assert_(!ir_is_immediate(uParam));
-    u16 uRepoIndex = u16(uParam >> IR_STD_PARAM_REPO_ID_SHIFT);
-    if (uRepoIndex >= IR_REPO_ID_FIRST_FILE) {
-        u32 uEntityId = u32(uParam >> IR_STD_PARAM_SHIFT) & 0x00FF'FFFFu;
-        if (0x0040'0000u == (uEntityId & 0x00C0'0000u)) {
-            *outSourceFile = pIRCtx->pProgCompilationState->vecSourceFiles[uRepoIndex - IR_REPO_ID_FIRST_FILE];
-            u32 uBindingIndex = uEntityId & 0x003F'FFFFu;
-            ValueBinding* pBindingThere = (*outSourceFile)->vecAllGlobalBindings[uBindingIndex];
-            Assert_((pBindingThere->info.uIRandMetaFlags & IR_STD_PARAM_MASK) == uParam);
-            *outBinding = pBindingThere;
-            return true;
-        }
-    }
-    return false;
-}
-
-local_func bool ir_is_non_imm_referencing_proc_body(u64 uParam, IRAwareContext* pIRCtx, SourceFileDescAndState** outSourceFile, TCProcBodyRegistration** outProcRegistration) {
-    Assert_(!ir_is_immediate(uParam));
-    u16 uRepoIndex = u16(uParam >> IR_STD_PARAM_REPO_ID_SHIFT);
-    if (uRepoIndex >= IR_REPO_ID_FIRST_FILE) {
-        u32 uEntityId = u32(uParam >> IR_STD_PARAM_SHIFT) & 0x00FF'FFFFu;
-        if (0x0080'0000u == (uEntityId & 0x00C0'0000u)) {
-            *outSourceFile = pIRCtx->pProgCompilationState->vecSourceFiles[uRepoIndex - IR_REPO_ID_FIRST_FILE];
-            u32 uProcIndex = uEntityId & 0x003F'FFFFu;
-            *outProcRegistration = (*outSourceFile)->vecAllProcBodies[uProcIndex];
-            return true;
-        }
-    }
-    return false;
-}
-
-local_func bool ir_is_non_imm_referencing_ir_entry(u64 uParam, IRAwareContext* pIRCtx, IRRepo** outRepo, u32* outIndex, SourceFileDescAndState** outSourceFile, EEntryKind* outKind) {
-    Assert_(!ir_is_immediate(uParam));
-    u32 uPayload32 = u32(uParam >> IR_STD_PARAM_SHIFT);
-    if (0uLL == (uParam & IR_STD_PARAM_HIGHMASK)) {
-        *outRepo = &(pIRCtx->pProgCompilationState->programwiseRepo);
-        *outIndex = uPayload32;
-        *outSourceFile = 0;
-        *outKind = EEK_PROGRAMWISE_ENTRY;
-        return true;
-    } else {
-        u16 uRepoIndex = u16(uParam >> IR_STD_PARAM_REPO_ID_SHIFT);
-        if (uRepoIndex >= IR_REPO_ID_FIRST_FILE) {
-            u32 uFileIndex = uRepoIndex - IR_REPO_ID_FIRST_FILE;
-            *outSourceFile = pIRCtx->pProgCompilationState->vecSourceFiles[uRepoIndex - IR_REPO_ID_FIRST_FILE];
-            *outIndex = uPayload32 & 0x003F'FFFFu;
-            u32 uHigh22and23 = uPayload32 & 0x00C0'0000u;
-            switch (uHigh22and23) {
-                case 0x0000'0000u:
-                    *outRepo = &((*outSourceFile)->filewiseConstRepo);
-                    *outKind = EEK_FILEWISE_CONST;
-                    return true;
-                case 0x0040'0000u:
-                    *outRepo = &((*outSourceFile)->filewiseGlobalVarRepo);
-                    *outKind = EEK_FILEWISE_VAR;
-                    return true;
-                case 0x0080'0000u:
-                    *outRepo = 0;
-                    *outKind = EEK_IS_PROCBODY_REF;
-                    return false;
-                case 0x00C0'0000u: // reserved for future use
-                    *outRepo = 0;
-                    *outKind = EEK_NOT_AN_ENTRY;
-                    return false;
-                default:
-                    Assume_(false);
-            }
-        } else {
-            Assert_(pIRCtx->pIsolatedSourceFile);
-            *outSourceFile = pIRCtx->pIsolatedSourceFile;
-            if (uRepoIndex == IR_REPO_ID_CURRENT_PROC) {
-                Assert_(pIRCtx->pRepo);
-                Assert_(pIRCtx->pProcResult);
-                Assert_(pIRCtx->pRepo == &(pIRCtx->pProcResult->procwiseRepo));
-                *outRepo = pIRCtx->pRepo;
-                *outKind = EEK_CURRENT_PROC_LOCAL;
-            } else {
-                Assert_(uRepoIndex == IR_REPO_ID_TEMPORARY);
-                Assert_(pIRCtx->pTmpRepo);
-                *outRepo = pIRCtx->pTmpRepo;
-                *outKind = EEK_CURRENT_TEMPORARY;
-            }
-            return true;
-        }        
-    }
-    return false;
-}
-*/
 
 local_func void ir_decode_non_imm(u64 uParam, IRAwareContext* pIRCtx, IRRepo** outRepo, u32* outIndex, SourceFileDescAndState** outSourceFile, EEntryKind* outKind) {
     Assert_(!ir_is_immediate(uParam));
@@ -388,83 +313,6 @@ local_func void ir_decode_non_imm(u64 uParam, IRAwareContext* pIRCtx, IRRepo** o
         }        
     }
 }
-
-
-/*
-// CLEANUP: some indices have been removed. Could shrink those tables if it mattered
-TypeInfo_Integral       g_tNonCompintIntegralTypes[29];
-TypeInfo_FloatingPoint  g_tFloatingPointTypes[6];
-TypeInfo_String         g_tStringTypes[4];
-TypeInfo_HwVector       g_tVectorTypes[102];
-TypeInfo_CoreBase       g_tOtherCoreTypes[10];
-
-TypeInfo_StructLike     g_tDummyStructLikeTypes[3];     // string_view, owned_string, any
-TCCompoundRegistration  g_tDummyStructRegistrations[3];
-ValueBinding            g_tDummyStructBindings[7];
-
-constexpr u8   RUNTIME_TYPEINFO_FORMAT = 0x03u;
-constexpr u8   RUNTIME_TYPEINFO_ALIGN_LOG2 = 4u;
-constexpr u32  RUNTIME_TYPEINFO_CONSTDECL_FLAGS = 0u; // TODO: 20b available here
-
-
-
-local_func u32 reserve_global_runtime_typeinfo_integral(WholeProgramCompilationState* pCompState)
-{
-    u32 uPos = pCompState->vecGlobalIR.size();
-    constexpr u32 RUNTIME_TYPEINFO_INTEGRAL_SLOTS = 1u;  // TODO: design and compute actual footprint for runtime_typeinfo_integral
-    u64 uInstruction = IRIT_RESERVE_CONST | (u64(RUNTIME_TYPEINFO_FORMAT) << 8) | (u64(RUNTIME_TYPEINFO_ALIGN_LOG2) << 16) |
-        (u64(RUNTIME_TYPEINFO_CONSTDECL_FLAGS) << 20) | (u64(RUNTIME_TYPEINFO_INTEGRAL_SLOTS) << 40);
-    // TODO: const declaration followup : defining the actual const value.
-    // TODO: compute meta-ir 32b flags and 64b value from instruction and followup.
-    pCompState->vecGlobalIR.append(uInstruction);
-    return uPos | IR_FLAG32_PROGRAM_GLOBAL_STORAGE;
-}
-local_func u32 reserve_global_runtime_typeinfo_floatingpoint(WholeProgramCompilationState* pCompState)
-{
-    u32 uPos = pCompState->vecGlobalIR.size();
-    constexpr u32 RUNTIME_TYPEINFO_FLOATINGPOINT_SLOTS = 1u;  // TODO: design and compute actual footprint for runtime_typeinfo_floatingpoint
-    u64 uInstruction = IRIT_RESERVE_CONST | (u64(RUNTIME_TYPEINFO_FORMAT) << 8) | (u64(RUNTIME_TYPEINFO_ALIGN_LOG2) << 16) |
-        (u64(RUNTIME_TYPEINFO_CONSTDECL_FLAGS) << 20) | (u64(RUNTIME_TYPEINFO_FLOATINGPOINT_SLOTS) << 40);
-    // TODO: const declaration followup : defining the actual const value.
-    // TODO: compute meta-ir 32b flags and 64b value from instruction and followup.
-    pCompState->vecGlobalIR.append(uInstruction);
-    return uPos | IR_FLAG32_PROGRAM_GLOBAL_STORAGE;
-}
-local_func u32 reserve_global_runtime_typeinfo_stringrelated(WholeProgramCompilationState* pCompState)
-{
-    u32 uPos = pCompState->vecGlobalIR.size();
-    constexpr u32 RUNTIME_TYPEINFO_STRINGRELATED_SLOTS = 1u;  // TODO: design and compute actual footprint for runtime_typeinfo_stringrelated
-    u64 uInstruction = IRIT_RESERVE_CONST | (u64(RUNTIME_TYPEINFO_FORMAT) << 8) | (u64(RUNTIME_TYPEINFO_ALIGN_LOG2) << 16) |
-        (u64(RUNTIME_TYPEINFO_CONSTDECL_FLAGS) << 20) | (u64(RUNTIME_TYPEINFO_STRINGRELATED_SLOTS) << 40);
-    // TODO: const declaration followup : defining the actual const value.
-    // TODO: compute meta-ir 32b flags and 64b value from instruction and followup.
-    pCompState->vecGlobalIR.append(uInstruction);
-    return uPos | IR_FLAG32_PROGRAM_GLOBAL_STORAGE;
-}
-local_func u32 reserve_global_runtime_typeinfo_othercore(WholeProgramCompilationState* pCompState)
-{
-    u32 uPos = pCompState->vecGlobalIR.size();
-    constexpr u32 RUNTIME_TYPEINFO_OTHERCORE_SLOTS = 1u;  // TODO: design and compute actual footprint for runtime_typeinfo_othercore
-    u64 uInstruction = IRIT_RESERVE_CONST | (u64(RUNTIME_TYPEINFO_FORMAT) << 8) | (u64(RUNTIME_TYPEINFO_ALIGN_LOG2) << 16) |
-        (u64(RUNTIME_TYPEINFO_CONSTDECL_FLAGS) << 20) | (u64(RUNTIME_TYPEINFO_OTHERCORE_SLOTS) << 40);
-    // TODO: const declaration followup : defining the actual const value.
-    // TODO: compute meta-ir 32b flags and 64b value from instruction and followup.
-    pCompState->vecGlobalIR.append(uInstruction);
-    return uPos | IR_FLAG32_PROGRAM_GLOBAL_STORAGE;
-}
-local_func u32 reserve_global_runtime_typeinfo_structlike(WholeProgramCompilationState* pCompState)
-{
-    u32 uPos = pCompState->vecGlobalIR.size();
-    constexpr u32 RUNTIME_TYPEINFO_STRUCTLIKE_SLOTS = 1u;  // TODO: design and compute actual footprint for runtime_typeinfo_structlike
-    u64 uInstruction = IRIT_RESERVE_CONST | (u64(RUNTIME_TYPEINFO_FORMAT) << 8) | (u64(RUNTIME_TYPEINFO_ALIGN_LOG2) << 16) |
-        (u64(RUNTIME_TYPEINFO_CONSTDECL_FLAGS) << 20) | (u64(RUNTIME_TYPEINFO_STRUCTLIKE_SLOTS) << 40);
-    // TODO: const declaration followup : defining the actual const value.
-    // TODO: compute meta-ir 32b flags and 64b value from instruction and followup.
-    pCompState->vecGlobalIR.append(uInstruction);
-    return uPos | IR_FLAG32_PROGRAM_GLOBAL_STORAGE;
-}
-*/
-
 
 local_func u32 register_identifier_during_parsing(StringView strId, SourceFileDescAndState* pSourceFileDesc, u16* outErrCodeOpt)
 {
@@ -564,6 +412,11 @@ local_func bool init_program_compilation_state(WholeProgramCompilationState* pPr
     // We also push our special implicit members identifiers
 
 
+    //
+    // TODO: the following is no longer needed in current scheme. What about the whole concept of a struct_like_impl for core types ?
+    //    eg. string related types do not need that struct_like_impl type any more
+    // CLEANUP: think about that again once we actuall implemented "any", dynamic arrays, and hash-containers.
+    //
     
     /*
     u32 idFlags = pProgramCompState->get_or_make_id("flags");

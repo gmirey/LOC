@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once
 
 #ifndef LOCLIB_NAMESPACE_H_
@@ -29,12 +44,19 @@ enum ESourceCompState : u32 {
 struct TCNamespace;
 struct ReferencedNamespace;
 // A laggued state stores the known bindings declared on a namespace, as seen by other source files.
-// There is one lagguedState for each TCNamespace, and one distinct lagguedState for each different source file referencing it.
+// There is one lagguedState for each TCNamespace.
+//      At start, it was designed so that there is also one distinct lagguedState for each different source file referencing it.
+//      Currently, though, all namespaces having knowledge of another go through that same, unique 'lagguedState', foreplanned behind
+//         a read/write lock (when we implement MultiThread).
 // Usage: 
 //    Once a source file has finished a TC-task which has found at least one new declaration within a namespace, it
 //       takes a lock on its laggued state, updates it, then release the lock (and scheduler can notify of its update to all interested)
+// Initial Plan:
 //    Once scheduler knows that a file has no currently working TC tasks, it can take a lock on referenced laggued states for each other file,
 //       update its own local copy of the laggued state, then release the lock (and scheduler can maybe wake tasks waiting on identifiers)
+// Current Plan:
+//    All files accessing namespaces from other files take a read lock on referenced laggued state *at the time of each access*
+//
 struct LaggedNamespaceState {
     ESourceCompState uDiscoveryProgress;                                        // for recording discovery progress
     u32 uVersion;                                                               // additional counter of "abritrary"-length for recording and *discriminating* discovery progress
@@ -45,6 +67,7 @@ struct LaggedNamespaceState {
     TmpArray<ReferencedNamespace*> vecKnownUsedNamespaces;                      // These are all the namespaces which are known declared as *using*
     TmpArray<const TypeInfo_Enum*> vecKnownUsedEnums;                           // These are all the *enums* which are known declared as *using*
 
+    // TODO: CLEANUP: Currently not really used
     TmpMap<u64, ReferencedNamespace*> mapKnownOthersUsingThis;                  // These are all the namespaces which are known *directly* 'using' this one
 };
 
@@ -61,16 +84,23 @@ struct TCNamespace {
     u32 uRegistrationIndex;                         // This is the registration index of this namespace *within its original source file*
     ESourceCompState eCompState;                    // ...
 
+    // Note: currently replaced by mapSetLocalUnshadowingByNamespaceUID, directly in source file.
     //TmpSet<int> setLocalUnshadowing;                    // This is the set of all locals found while parsing procbodies within this direct namespace, which should be checked afterwards for name collisions
+    
+    // Note: currently replaced by a simple vecUsedNamespaces (and vecKnownUsedNamespaces when laggued), which we'll walk recursively through namespace references if needed
     //TmpMap<u64, ReferencedNamespace*> mapReferencedNamespaces;   // This is the map of all namespaces having been directly bound to a namespace binding, or declared as 'using', within this namespace.
+    
     TmpMap<int, u32> mapPublicDeclarationsById;         // this map points to the binding repository of the *original source file*
     TmpMap<int, u32> mapAccessibleDeclarationsById;     // this map points to the binding repository of the *original source file*, and includes public, and package.
     TmpMap<int, u32> mapAllGlobalDeclarationsById;      // this map points to the binding repository of the *original source file*, and includes public, package and privates.
     TmpArray<ReferencedNamespace*> vecUsedNamespaces;   // These are all the namespaces which are known declared as *using*
     TmpArray<const TypeInfo_Enum*> vecUsedEnums;        // These are all the *enums* which are known declared as *using*
-    TmpSet<int> setOfNewlyDeclaredGlobalIdentifiers;    // global identifiers, newly declared on a TC pass, for fast-iteration to a lagged state.
 
+    TmpSet<int> setOfNewlyDeclaredGlobalIdentifiers;    // global identifiers, newly declared on a TC pass, for fast-iteration to a lagged state (and waking up tasks).
+
+    // TODO: CLEANUP: Currently not really used
     TmpMap<u64, ReferencedNamespace*> mapOthersUsingThis;    // These are all the namespaces which are *directly* 'using' this one
+
     u32 uCountGlobalTasksInTasksToLaunch;
     u32 uCountGlobalTasksInWaitingTasks;
 };

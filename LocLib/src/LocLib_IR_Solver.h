@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_IR_SOLVER_H_
@@ -915,8 +930,6 @@ local_func EIRResult ir_try_solve_quo_or_rem_or_mod_integral(u8 uOp, u8 uFormat,
         }
     }
 
-    // TODO: may return ensured 0 on A %% -1 or A % 1, ie. signed semantics and B == all bits 1s
-
     EIRResult eResultWhyUnknown = irflag_is_known_or_nyka(infoB.uIRandMetaFlags) ? EIRResult::EIRR_ENSURED_VALID_UNKNOWN : EIRResult::EIRR_UNKNOWN;
     if (irflag_is_known_or_nyka(infoA.uIRandMetaFlags) && irflag_is_known_or_nyka(infoB.uIRandMetaFlags)) {
         if (!irflag_is_or_has_nyka(infoA.uIRandMetaFlags) && !irflag_is_or_has_nyka(infoB.uIRandMetaFlags)) {
@@ -1039,7 +1052,7 @@ local_func EIRResult ir_try_solve_bitwise_binary_op_when_fully_evaluable_nz(u8 u
     }
 }
 
-// bitwise and, or, xor, not (expecting infoA only).
+// bitwise and, or, xor, not (expecting infoA only in case of not).
 local_func EIRResult ir_try_solve_bitwise_op(u8 uOp, u8 uFormat, const IRInfo& infoA, const IRInfo& infoB,
     TCContext* pTCContext, u32* outFlags, MetaValueIR* outMetaValue)
 {
@@ -1484,7 +1497,7 @@ local_func EIRResult ir_try_solve_ord_cmp_integral_two_nykas(u8 uFormat, AKnownV
     return EIRResult::EIRR_UNKNOWN_SOLVER_NOT_YET_IMPLEMENTED;
 }
 
-local_func EIRResult ir_try_solve_eq_cmp_integral_two_solvables(u8 uFormat, AKnownValue knownValueA, AKnownValue knownValueB,
+local_func EIRResult ir_try_solve_ord_cmp_integral_two_solvables(u8 uFormat, AKnownValue knownValueA, AKnownValue knownValueB,
     u32 uIsGeFlag, EIntSemantics eSemantics, u32* outFlags, MetaValueIR* outMetaValue)
 {
     Assert_(uIsGeFlag == 0u || uIsGeFlag == IR_INSTRFLAG_CMP_OPPOSITE);
@@ -1622,7 +1635,7 @@ local_func EIRResult ir_try_solve_ord_cmp_integral(u8 uFormat, const IRInfo& inf
     }
 
     if (irflag_is_known_non_nyka(infoA.uIRandMetaFlags) && irflag_is_known_non_nyka(infoB.uIRandMetaFlags)) {
-        return ir_try_solve_eq_cmp_integral_two_solvables(uFormat, infoA.metaValue.knownValue, infoB.metaValue.knownValue, uIsGeFlag,
+        return ir_try_solve_ord_cmp_integral_two_solvables(uFormat, infoA.metaValue.knownValue, infoB.metaValue.knownValue, uIsGeFlag,
             eSemantics, outFlags, outMetaValue);
     }
 
@@ -1664,7 +1677,7 @@ local_func EIRResult ir_try_solve_ord_cmp_integral(u8 uFormat, const IRInfo& inf
                 default:
                     // TODO
                     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL0_IMPL_ERROR, EventREPT_CUSTOM_HARDCODED(
-                        "### ir_try_solve_eq_cmp_integral() : integrals > 64b not yet implemented"), pTCContext->pWorker);
+                        "### ir_try_solve_ord_cmp_integral() : integrals > 64b not yet implemented"), pTCContext->pWorker);
                     return EIRResult::EIRR_UNKNOWN_SOLVER_NOT_YET_IMPLEMENTED;
             }
         } else {
@@ -1690,7 +1703,7 @@ local_func EIRResult ir_try_solve_ord_cmp_integral(u8 uFormat, const IRInfo& inf
                 default:
                     // TODO
                     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL0_IMPL_ERROR, EventREPT_CUSTOM_HARDCODED(
-                        "### ir_try_solve_eq_cmp_integral() : integrals > 64b not yet implemented"), pTCContext->pWorker);
+                        "### ir_try_solve_ord_cmp_integral() : integrals > 64b not yet implemented"), pTCContext->pWorker);
                     return EIRResult::EIRR_UNKNOWN_SOLVER_NOT_YET_IMPLEMENTED;
             }
             uKnownBoolResult = ((uValueA < uValueB) == bIsLt) ? 1u : 0u;

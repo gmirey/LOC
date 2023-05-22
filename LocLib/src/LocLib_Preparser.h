@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once
 
 #ifndef LOCLIB_PREPARSER_H_
@@ -10,7 +25,6 @@
 #include "LocLib_Compint.h"
 #include "LocLib_ScanAndTok.h"
 #include "LocLib_TokenizerEnums.h"
-//#include "LocLib_ParserEnums.h"
 #include "LocLib_ErrorEnums.h"
 #include "LocLib_ProgramState.h"
 #include "LocLib_PreParserTypes.h"
@@ -87,11 +101,13 @@ local_func bool parse_natnum_payload_from_preparsed_info_with_base(const u8* pDa
         }
 
         if (uResult64 < 0x2000'0000'0000'0000uLL) {
+            // this here is the *same encoding* as what TC will subsequently consider to be an embedded, positive, "compint".
             *outResult = uResult64 << 3;
+            // (As a side note: our literals are never negative: the operator '-' is not part of the literal, for declaring negative numbers)
             return true;
         } else {
             // TODO
-            debug_print_preparse_err("*** large 64b integer to 1-leged compint not yet implemented");
+            debug_print_preparse_err("*** large 64b integer to 1-legged compint not yet implemented");
             pre_parser_set_error(FERR_NOT_YET_IMPLEMENTED, tokenRef);
             return false;
         }
@@ -380,9 +396,9 @@ local_func bool make_nat_payload_from_token_return_is_small(TokenRef& tokenRef,
     if (0 == (tokenRef.token.uTokenPayloadAndKind & TOKENKINDFLAG_EXTREME_NUMERAL)) { // simple case: 24b payload already decoded
         *outResult = u64(tokenRef.token.uTokenPayloadAndKind >> 8) << 3;
         return true;
-    } else { // payload contains 11b positions and count of digits to decode.
+    } else { // payload contains 11b positions and count of digits to decode (thanks to limits on our possible scanned line length).
         u32 uEncodedBase = tokenRef.token.uTokenPayloadAndKind & 0x03u;
-        i32 iPositionOfFirstSignificantDigit = i32(tokenRef.token.uTokenPayloadAndKind >> 8) & 0x0000'07FF;
+        i32 iPositionOfFirstSignificantDigit = i32(tokenRef.token.uTokenPayloadAndKind >> 8) & 0x0000'07FF; // relative to start pos of token
         i32 iDigitsCount = i32(tokenRef.token.uTokenPayloadAndKind >> 19) & 0x0000'07FF;
         const u8* pStart = parserParams.parserState.pStartOfLineAfterIndent + tokenRef.token.uTokenStartCharOnLine;
         const u8* pCurrent = pStart + iPositionOfFirstSignificantDigit;
@@ -407,7 +423,7 @@ local_func bool make_float_payload_from_token_return_is_small(TokenRef& tokenRef
     if (0 == (tokenRef.token.uTokenPayloadAndKind & TOKENKINDFLAG_EXTREME_NUMERAL)) {
         if (tokenRef.token.uTokenPayloadAndKind & 0xFFFF'FF00u) {
             // nominal case: payload has 5b start pos ; 7b total significant digits ; 12b exponent at Least Significant Digit
-            i32 iPositionOfFirstSignificantDigit = i32(tokenRef.token.uTokenPayloadAndKind >> 8) & 0x0000'001F;
+            i32 iPositionOfFirstSignificantDigit = i32(tokenRef.token.uTokenPayloadAndKind >> 8) & 0x0000'001F; // relative to start pos of token
             i32 iSignificantDigitsCount = i32(tokenRef.token.uTokenPayloadAndKind >> 13) & 0x0000'007F;
             i32 iExponentAtLastSignificantDigit = i32(tokenRef.token.uTokenPayloadAndKind) >> 20; // kept already signed from MSB
             const u8* pCurrent = pStart + iPositionOfFirstSignificantDigit;
@@ -568,7 +584,7 @@ local_func bool make_string_payload_from_token_return_is_small(TokenRef& tokenRe
                 tTmpUnescaped[uByteOut++] = pStringData[uByteIn];
             }
         }
-        // TODO: align-to 8 bytes for direct use of this result as runtime values by the typechecker ? (currently 'makeFF' aligns to 4...)
+        // TODO ?? align-to 8 bytes for direct use of this result as runtime values by the typechecker ? (currently 'makeFF' aligns to 4...)
         FFString strPayload = FFString::makeFF(StringView::from_known_c_str((const char*)tTmpUnescaped, uByteOut, false),
             parserParams.pSourceFile->parseOnlyArena);
         *outResult = reinterpret_cast<u64>(strPayload.pStart);

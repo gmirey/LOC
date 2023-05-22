@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_COMPINT_H_
@@ -101,7 +116,7 @@ local_func CompNat* compnat_mul(CompNat* pA, CompNat* pB, CompilationContext* pE
 	return pResult;
 }
 
-// Divides two compnats A and B, returns A /% B (and additoinal outparam A %% B), when A >= B.
+// Divides two compnats A and B, returns A /% B (and additionnal outparam A %% B), when A >= B.
 // Note: Our requirement is in fact that A has at least same leg count than B. However, caller would be well-advised to
 //   handle the whole 'A < B' case separately anyway (could decide on allocs of 'remainder == A' better than we could do
 //   here, for example)... and by the way, the 'A == B' case could also benefit from a separate path.

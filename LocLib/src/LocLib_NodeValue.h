@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_NODE_VALUE_H_
@@ -38,12 +53,8 @@
     Cases where NodeValue does *not* have a type (pType == 0):
     - when it represents the sink in the LHV of a declaration or assignment ; additionally, its IR is then 0
     - when it represents the special "uninitialized" value in the RHV of a local declaration ; additionally, its IR is then 0
-    - when we're in the process of declaring a new Binding, but the RHV has not yet been evaluated - the interruptability of declarations is to allow for even cyclic references to NYKAs as constants or init values of other bindings.
-    - note: Any ValueBinding can thus "legally" have a type 0, but a solver shall interrupt evaluation (same as for when global binding is not-yet known)
-        upon encountering those... UNLESS:
-        - the request for the expression is an "addressof" operator, in which case the resulting address can take the special "NotYetTypedAddress" type.
-        - "NotYetTypedAddress" types can safely cast to rawptr.
-        - "NotYetTypedAddress" types may pre-accept casts to typed pointers, either forfeiting (with a warning ?) or postponing the ptr-alignment checks ??
+    - CLEANUP: Not used any more: when we're in the process of declaring a new Binding, but the RHV has not yet been evaluated - the interruptability of declarations is to allow for even cyclic references to NYKAs as constants or init values of other bindings.
+    - when it is a ValueBinding which was created to represent an identifier, declared on a statement happening to be in error.
 
     So: Besides type, a NodeValue has a 64b value encoding both a 40b IR code and the 24b meta-IR flags associated with it, it also has a copy of the 64b MetaValueIR found at that IR position (relevant for known values)
 
@@ -63,8 +74,8 @@
     To achieve that, we limit:
         - The source-file count:
             65 thousand max.
-                -> does not *seem* anywhere close to a very 'limiting' file count for most source-code I know of.
-                -> can always split too-large codebases into separate DLLs ?
+                -> does not *seem* anywhere close to a very 'limiting' file count for most source-code I know of (that is, in a single binary: exe or DLL).
+                -> can always split too-large codebases into separate DLLs
         - The number of IR instruction slots (including specific 'declaration' instructions) usable for global declarations, per sourcefile:
             16M max (global vars, global constants/procs, user-defined types, possibly some local constants promoted to global, such as proc-defs)
                 -> does not *seem* anywhere close to a very 'limiting' declaration count for most source-code I know of.
@@ -93,10 +104,16 @@ struct NodeValue {
     IRInfo info;            // 2x64b : 40b MSB IR ; 24b LSB meta-flags of that IR *value* + Copy of "MetaInfo" found at the IR position ; especially relevant for TC when IRFLAG_IS_KNOWN is raised (as AKnownValue through the .whenKnown member).
 };
 
-// Note that 'compints' will have a special representation, **not** based on these flags (so that we can encode any compint, even within compound-types)
+// Note: Currently, compints are not supposed to get anywhere near the IR representation
+// Yet... we *might* one day want to allow that, so that we could maybe have entities which could represent TC-only structures, but *in IR*,
+//    and use them is some corner cases of comptime execution of user-specified functions ??? not really sure about all this atm.
+// So... Compints may also detectable by IR from the special IR format encoding '0x38u'
+//   The decision to downgrade compints as 'int' will stay a typechecker-only thing.
+// Note that in that 'future-plan' case, 'reinterpret-cast' to or from a compint is 'somewhat possible' and must be understood as reinterp-cast to/from that *special-encoding* itself, and not to/from the value it represents.
+//   To cast a compint *value* to another representation with a similar numerical 'semantic', we may use the simple cast operators in IR.
+// 
+// Note that 'compints' have a special representation, **not** based on the standard IR flags (so that we can encode any compint, even within compound-types)
 //   They'll be a tagged 64b encoding of their own : 3 lsb represent: is_negative (100) + is_embedded (.00) or points_to_1leg (.01) or points to two legs (.10) or points to N legs (.11, with first pointed leg in fact holding leg count)
-// Compints are also detectable by IR from the special IR format encoding '0x38u'
-//   The decision to downgrade compints as 'int' will however be a typechecker-only thing.
 
 #define COMPINT_PSEUDO_IR_FORMAT    0x38u   // corresponds to a vec-slot of 8x f8... thus it has same footprint as our '64b' tagged-ptr/embd encoding, and does not conflict with others since 'f8' is not a valid format.
 
@@ -109,16 +126,19 @@ struct NodeValue {
 #define COMPINT_SIZE_2LEGS               2u
 #define COMPINT_SIZE_NLEGS               3u
 
-// Note that 'reinterpret-cast' to or from a compint is 'somewhat possible' and must be understood as reinterp-cast to/from that *special-encoding* itself, and not to/from the value it represents.
-//   To cast a compint *value* to another representation with a similar numerical 'semantic', use cast operators in IR.
-//   Note that no compint should remain anywhere within the 'runtime' IR when it is time for emission to backend.
 
-// For the 'other' *unsized* comptime kind which is float literals, they are encoded exacly same as 'xfloat' (0x0E) ...:
-//     their known full-payload is 8x64b, with possible 'is_embedded' flag if their value fit unmodified as an f64.
+// For the 'other' *unsized* comptime kind which is float literals, they shall, at one point, be encoded exacly same as 'xfloat' (0x0E) ...:
+//     their known full-payload will thus be 8x64b, with possible flag if their value fit unmodified as an f64.
 //   The decision to downgrade float literals as f64 will however be a typechecker-only thing.
-//   Note that all known special values such as +0.0, -0.0, +inf, -inf, snan, or qnan... shall always be 'embedded'
-//     whatever the float footprint, including xfloat and float literals (and note that this also means we do not support 'NaN payloads').
-//   The possibility than any 'xfloat' remains within the 'runtime' IR is subordinate to the compilation-param-flag 'runtime-allow xfloat emulation'
+//   The possibility that any 'xfloat' remains within the 'runtime' IR may be subordinate to a compilation-param-flag
+//   It is expected that many unqualified conversions of float literals will use them as in fact f64 at runtime
+//      (and this is the current alias for 'float' in LOC)... but they'll be kept as xfloat until known whether user asks explicitely for
+//      more precision on usage. Note that we may add a compilation param allowing a forced-downgrade of comptime floats to f64.
+// CLEANUP:THOUGHTS: 
+//   At start, we went with the idea that all known special values such as +0.0, -0.0, +inf, -inf, snan, or qnan... shall always have an 'embedded',
+//      representation, whatever the float type. However, following the simplification of embedding and immediates, integral formats larger than
+//      64b are now *never embedded* => we'll follow same rule for FP (as for any other type, btw)
+//   Besides, not forcing embedding of NaNs would allow LOC to deal with possible NaN *payloads*, something which was ruled out with previous plan.
 
 #define XFLOAT_PSEUDO_IR_FORMAT     0x0Eu   // corresponds to a scalar-slot of f512... thus it has same footprint as our 8x64b encoding, and does not conflict with others since 'f512' is not a valid format.
 
@@ -226,13 +246,8 @@ struct BindingSourceRefs {
     u32 uIfExpandedExpansionAstStatementIndexInBlock; // unused for regular ; for bindings declared in an unhygienic expansion, ref at leaf macro source site
 };
 
-// Definition of a variable or constant binding
-// Note that, as valueholders, 'local vars' will make no use whatsoever of the 'value' footprint they have here,
-//   however global vars will use that as their mandatory 'initial value'...
-// Note that "embedded 0" shall represent, for all types, a fully-zeroed memory range of the type-size. There
-//   is thus barely any need, during typechecking, to reference any all-zeroes const by ref (unless keeping a ref into
-//   a larger-typed, non-full-zero const, whose cast-value happens to be all-zeroes). Global or local zeroed consts will be
-//   registered in a special, distinct repository. Temporary const zero can also simply get the IR for "immediate-natural-zero".
+// Definition of a variable or constant *binding*.
+//   Happens to also be usable as a ValueHolder (shall be flagged with IRFLAG_TC_BINDING_INSTANCE in its info.uIRandMetaFlags)
 // 8x 64b
 __declspec(align(64))
 struct ValueBinding : public NodeValue {
@@ -244,6 +259,7 @@ struct ValueBinding : public NodeValue {
     BindingSourceRefs sourceRef;   // 3x 64b behemoth just for cross-referencing the source... ??
 };
 
+// Note: No longer currently required
 //static_assert(alignof(ValueBinding) >= 16, "ValueBinding alignment shall be at least 16 to interact with IR");
 
 local_func_inl IRInfo get_info_from_value(const NodeValue* pNodeValue) {

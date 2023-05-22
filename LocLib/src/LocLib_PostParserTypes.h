@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_POST_PARSER_TYPES_H_
@@ -42,7 +57,6 @@ struct AstModifierNode {
 // With all that said, here is the AstNode definition, which is only 2x64b (=> fitting 4 of these in a cache line),
 //      all-the while holding sufficient info (pivotal token refs...) to round-trip to their definition in code, for
 //      any program (such as LocLang IDE) with knowledge of same source code and tokens and associated statement.
-// Since inlining or parametric-polymorphism may 
 struct AstNode {
 
     DECL_TRIVIAL_STRUCT_OPS(AstNode);
@@ -89,6 +103,7 @@ enum ENodeKindFlag {
     ENODEKINDFLAG_HAS_NO_TC_EXPR_VALUE       = 0x04000000,
 
     // positionned by the typechecker, but not part of the 'tc' flags proper
+    // Note: Not used any more with current scheme...
 //    ENODEKINDFLAG_HAS_BOOL_PRE_INVERSION            = 0x08000000,
 //    ENODEKINDFLAG_IS_INTRINSIC_USER_REFERENCEABLE   = 0x10000000,
 

@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_IR_BLOCK_GRAPH_H_
@@ -23,6 +38,9 @@
 #include "LocLib_IR_Solver.h"
 #include "LocLib_IR.h"
 
+// allows graph-builder to actually skip branched based on already-solved flags ?
+// TODO: CLEANUP: Is that really necessary ? Wouldn't known branches be directly replaced by gotos at IR level ??
+// TODO: THOUGHTS: 'path hotness' flags should be reported to GOTOs in that case...
 local_func bool is_branching_decision_known(const IREntry& entry, u32 uInstrIndex, TCProcBodyResult* pProc, TCContext* pContext, bool* outWhenKnownIsTaken)
 {
     Assert_(u8(entry.uInstrCodeAndFormatAndFirstParam) == IRIT_BRANCH || u8(entry.uInstrCodeAndFormatAndFirstParam) == IRIT_ERRCHK);
@@ -196,15 +214,17 @@ local_func TmpArray<IRBlock> build_IR_graph_for_proc(TCProcBodyResult* pProc, TC
                 // When compiling in release mode with runtime checks disabled, we do not perform those errchks in backend
                 //   anymore... yet we are not *allowed* to do optimization passes on the code as-if they were not taken.
                 //   so... divs by zero shall fault, derefs out of index may access violation, and arithmetics shall wrap...
-                //   but that's about it.
-                // When compiling in ultra-release mode with "self-confidence" enabled, we're instructing the compiler that
+                //   but that's about it => we can still ignore them for a pure 'raw-graph" point of view.
+                // When compiling in ultra-release mode with "self-confidence" enabled, we'd want to instruct the compiler that
                 //   it is allowed to treat assumptions as granted. This encompass the belief that errchecks will *not* trigger,
                 //   and the right to act upon that belief as input to all optimization passes : const-prop, dead-code elim,
                 //   etc. So: if a div by zero cannot occur anymore, it means we're allowed to assume that divisor isn't zero,
                 //   even *before* the div, proper. If a default case in a switch is *unreachable*, it means we're allowed to
                 //   assume that the parameter is necessarily one of the listed ones, even *before* we check for it. It can
                 //   have profound effects on constraint analysis, and results may be quite puzzling and illogical if you were
-                //   wrong in enabling "self-confidence" in the first place.
+                //   wrong in enabling "self-confidence" in the first place. This would be the *theoretical* equivalent of allowed
+                //   behaviour of an optimizing-C-compiler-extremist, allowed to act on any UB in the book... obviously to use with
+                //   caution, if we were to ever pursue that idea...
                 if (bConsiderErrHandler) {
                     // ErrChks force the closing of current block by a possible fallthrough *AND* a conditional jump.
                     vecBlocks[uCurrentBlock].uNextBlockByBranching = IRGRAPH_ERR_INDEX;
@@ -1045,8 +1065,14 @@ local_func GraphResult walk_IR_graph_for_proc_trimming_nodes_and_gather_locals(T
         u32 uFlags;
         u32 _pad0;
     };
+
     // Direct correspondance with raw block index + we'll put a virtual block for holding tight as a proc-entry, at the end
     u32 uBlockReduceArraySize = uRawBlockCount+1u;
+    //
+    // TODO: CLEANUP: do we really need that concept of a "virtual block holding tight as a proc-entry, at the end", when we could have
+    // used a more 'concrete' initial block spanning the actual prolog (ensured non-empty, by virtue of the added 'NOOP' in empty cases).
+    // currently we're just 'skipping' that prolog entirely on raw graph itself.
+    //
     TmpBlockReduce* tBlockReduce = (TmpBlockReduce*)alloc_from(pTCContext->pWorker->tmpArena,
         sizeof(TmpBlockReduce)*uBlockReduceArraySize, alignof(TmpBlockReduce));
     TmpArray<u32> vecModifiableBlockReduce(pTCContext->pWorker->tmpArena);

@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once
 
 #ifndef LOCLIB_SOURCE_FILE_DESC_AND_STATE_H_
@@ -51,21 +66,6 @@ local_func_inl TCWaitingReason make_waiting_reason(ETaskWaitingReason eReason, i
     return result;
 }
 
-#if 0
-struct LaggedSourceState {
-    u32 uDiscoveryProgress;
-    u32 uVersion;
-    TmpMap<int, u32> mapKnownPublicDeclarationsById;
-    TmpMap<int, u32> mapKnownPackageDeclarationsById;
-};
-
-struct SourceFileDescAndState;
-struct ReferencedOtherSource {
-    SourceFileDescAndState* pSourceFile;
-    LaggedSourceState laggedState;
-};
-#endif
-
 struct ForeignSourceDecl {
     StringView staticLibName;
     StringView dynamicLibName;
@@ -90,17 +90,16 @@ struct SourceFileDescAndState {
     TmpArray<FFString> locallyFoundIdentifierNamesByOffsetId; // filled up during parsing, pushed in one go to global after parsing
     WholeProgramCompilationState* programState;               // holding mapAllIdentifierIdsByName and final vecAllIdentifierNamesById
 
-    // this-source-file-specific arena
+    // arena specific to *this* source-file
     //   (ensured single-accessed at all times by virtue of hard requirement of only at most one typechecking task in flight per source file)
     Arena localArena;
 
-    Arena preparsingArenaKeepingErrors;
+    Arena preparsingArenaKeepingErrors; // TODO: CLEANUP: could be organied such as we use the single localArena instead...
 
     //
     // The following containers are allocated from localArena
     //
 
-    //TypecheckedBlock* tTCBlocks;
     TmpArray<LocLib_Error> vecErrors;                         // All errors emitted from parsing or typechecking from this source
     u32 uWarningCount;                                        // TODO: replace that with an array of warnings
 

@@ -1,3 +1,18 @@
+// Part of LocLang/HighPerfTools
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once
 
 #include "BaseDecls.h"
@@ -98,6 +113,7 @@ local_func_inl bool lesser_than_legs64(const u64* tLegsA, const u64* tLegsB, int
     return false;
 }
 
+// compares legs of A with same-sized legs of B. returns -1 if A is found strictly lesser than B, +1 if stricly greater, 0 if equal.
 local_func_inl int cmp_leg64(const u64* tLegsA, const u64* tLegsB, int iLegsCount) {
     for (int i=iLegsCount-1; i >= 0; i--) {
         u64 uLegA = tLegsA[i];
@@ -119,6 +135,7 @@ local_func_inl bool equal_leg64(const u64* tLegsA, const u64* tLegsB, int iLegsC
     return true;
 }
 
+// indicates whether all legs are zero...
 local_func_inl bool are_all_zero_leg64(const u64* tLegs, int iLegsCount) {
     for (int i=iLegsCount-1; i >= 0; i--) {
         if (tLegs[i])
@@ -561,31 +578,37 @@ local_func void long_div_leg64_to(u64* tQuotientLegs, u64* ioDividendAndRem, int
     }
 }
 
+// same leg-count, R = A & B
 local_func_inl void bit_and_legs64_to(u64* tLegsR, const u64* tLegsA, const u64* tLegsB, i32 iLegCount) {
     for (i32 i=0; i<iLegCount; i++)
         tLegsR[i] = tLegsA[i] & tLegsB[i];
 }
 
+// same leg-count, R = A | B
 local_func_inl void bit_or_legs64_to(u64* tLegsR, const u64* tLegsA, const u64* tLegsB, i32 iLegCount) {
     for (i32 i=0; i<iLegCount; i++)
         tLegsR[i] = tLegsA[i] | tLegsB[i];
 }
 
+// same leg-count, R = A ^ B
 local_func_inl void bit_xor_legs64_to(u64* tLegsR, const u64* tLegsA, const u64* tLegsB, i32 iLegCount) {
     for (i32 i=0; i<iLegCount; i++)
         tLegsR[i] = tLegsA[i] ^ tLegsB[i];
 }
 
+// same leg-count, A &= B
 local_func_inl void bit_and_legs64_inplace(u64* tLegsA, const u64* tLegsB, i32 iLegCount) {
     for (i32 i=0; i<iLegCount; i++)
         tLegsA[i] &= tLegsB[i];
 }
 
+// same leg-count, A |= B
 local_func_inl void bit_or_legs64_inplace(u64* tLegsA, const u64* tLegsB, i32 iLegCount) {
     for (i32 i=0; i<iLegCount; i++)
         tLegsA[i] |= tLegsB[i];
 }
 
+// same leg-count, A ^= B
 local_func_inl void bit_xor_legs64_inplace(u64* tLegsA, const u64* tLegsB, i32 iLegCount) {
     for (i32 i=0; i<iLegCount; i++)
         tLegsA[i] ^= tLegsB[i];

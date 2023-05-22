@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_IR_TYPES_H_
@@ -40,9 +55,9 @@ local_func_inl u8 get_ir_format_for_addresses(CompilationContext* pEvalContext) 
     IRIT_MAGIC_EMIT( DEREF,             IR_INSTR_STDFORMAT, IRPARAM_STANDARD,  IRPARAM_STATIC_SLOT_COUNT_AND_ALIGN, IR_INSTR_REFERENCABLE) \
         /* IRIT_LOCAL_ADDRESS: in first param is IR of entity to reference by address. Should only be used on local, non-const (otherwise resulting IR is encodable as nyka immediate). */ \
     IRIT_MAGIC_EMIT( LOCAL_ADDRESS,     0x03u,              IRPARAM_STANDARD,  IRPARAM_NONE                       , 0u                   ) \
-        /* IRIT_PTR_OFFSET: in first param is IR of base address. in format slot is index scale x1..x256. in instr flag is IR_INSTRFLAG_INT_SEMANTICS_UNSIGNED for 32b, and 4lsb instr flags is log2 of ensured align. in second param is IR of index, supposed i32 */ \
+        /* IRIT_PTR_OFFSET: in first param is IR of base address. in format slot is index scale x1..x256. in instr flag is IR_INSTRFLAG_INT_SEMANTICS_UNSIGNED for whether 32b index is u32 (otherwise i32), and 4lsb instr flags is log2 of ensured align. in second param is IR of index */ \
     IRIT_MAGIC_EMIT( PTR_OFFSET,        0x03u,              IRPARAM_STANDARD,  IRPARAM_STANDARD                   , 0u                   ) \
-        /* IRIT_PTR_OFFSET_EXT: in first param is IR of base address. in instr flag is IR_INSTRFLAG_INT_SEMANTICS_UNSIGNED for 32b, and 4lsb instr flags is log2 of ensured align. in format is nothing. in second param is index scale. */ \
+        /* IRIT_PTR_OFFSET_EXT: in first param is IR of base address. in instr flag is IR_INSTRFLAG_INT_SEMANTICS_UNSIGNED for whether index is unsigned, and 4lsb instr flags is log2 of ensured align. in format is nothing. in second param is index scale. */ \
         /* Awaits as additional param: the index proper (any scalar integral >= 32b). */ \
     IRIT_MAGIC_EMIT( PTR_OFFSET_EXT,    0x03u,              IRPARAM_STANDARD,  IRPARAM_SPECIAL                    , 0u                   ) \
         /* IRIT_PTR_DIFF: format is necessarily <= 0x05 => remaining 5b format + some bits of instr flags for small byte factors */ \

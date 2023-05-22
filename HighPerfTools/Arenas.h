@@ -1,8 +1,23 @@
+// Part of LocLang/HighPerfTools
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once
 
 #include "BaseDecls.h"     // basic stuff for everything
 #include "Platform.h"
-#include "ChunkProvider.h"     // Chunk provider for arenas. TODO: replace with "ChunkProvider.h" when ready
+#include "ChunkProvider.h"
 
 #define ARENA_FLAG_ALLOWED_TO_GROW              0x10000000u     // indicates whether we can require more chunks
 #define ARENA_FLAG_ALLOWED_TO_RESIZE_ON_GROW    0x20000000u     // indicates whether the additional chunks on growth can be of greater size than the first
@@ -184,7 +199,7 @@ namespace ArenaImpl {
         #endif
         // We're called when we do not have enough room in current chunk to comply with some allocation demand.
         u8* ptr = 0;
-        // if someone called 'resetArenaNoRelease', we may have a non-null 'next_chunk' chain from 'current_chunk'
+        // if someone called 'reset_arena_no_release', we may have a non-null 'next_chunk' chain from 'current_chunk'
         ArenaChunkHeader* last_chunk = arena.root_chunk()->last_chunk();
         #if DEBUG_ARENAS_ALLOC_PRINTLEVEL > 1
             sprintf(szBuffer, "(last_chunk at 0x%llx, with reserved byte size = %u)", (u64)last_chunk, last_chunk->reserved_byte_size);
@@ -281,7 +296,7 @@ static void reset_arena_no_release(Arena arena)
 
 // Stores information about the alloc-state of an arena, so that its actual size can be reverted to this very state.
 //   In effect, this gives any Arena a 'stack-like' capability, able to grow and shrink sequentially, on demand.
-//   @see 'get_arena_ref_point', 'resetArenaTo', 'resetArenaNoReleaseTo'
+//   @see 'get_arena_ref_point', 'reset_arena_to', 'reset_arena_no_release_to'
 struct ArenaRefPoint {
     ChunkHandle current_chunk_handle;
     u32 used_byte_size;

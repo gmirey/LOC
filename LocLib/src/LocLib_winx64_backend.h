@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_WINX64_BACKEND_H_
@@ -162,8 +177,26 @@ local_func void winx64_backend_on_emit_proc(u64 uAsIR, WinX64BackendCtx* pCtx)
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
             "Emitting function prolog"), pCtx->pWorker);
 
+        // 
+        // TODO: !!!
+        // Our current code (before we implement the reg allocation 'strategy' pass) makes heavy use of RBX as
+        //   a tmp register... but RBX shall in fact be "callee-saved" in the windows x64 ABI
+        //   => Fix that ASAP: we need to push RBX on prolog, and pop on epilog... Atm our sample code don't use many callbacks
+        //   with non-LOC callers which could be messed up by this (Except WindowProc which behaved fine until now in that regard)
+        //   but this is still NOT_COOL(tm).
+        // TODO: to push RBX anywhere, be it before the following local stack size sub (recommended), or after it, we'd need to
+        //   take that displacement into account when we subsequently compute the position of locals AND of func params/shadow space
+        // => We cannot quick-and-dirty-fix that now as emitting a hardcoded push: we need to think about that positionning issue for real.
+        //
+
         if (procInfo.uLocalStackSize) {
             // increasing stack size (decreasing stack ptr)
+
+            //
+            // TODO: call __chkstack (from kernelbase.dll), having set RAX to the stack size, before subtracting by RAX,
+            //       iff local stack size > 8K
+            //
+
             winx64_emit_dest_src_op(EX64_DEST_SRC_OP_SUB, make_operand_reg(REG_X64_xSP), make_operand_immediate(i64(u64(procInfo.uLocalStackSize))), 0x03u, pCtx);
         }
 
@@ -407,7 +440,7 @@ local_func void winx64_backend_on_emit_proc(u64 uAsIR, WinX64BackendCtx* pCtx)
             } break;
 
             case IRIT_RET: {
-                // Emitting outtro:
+                // Emitting epilog:
                 if (procInfo.uOutParamsCount) {
                     Assert_(procInfo.uOutParamsCount == 1u);
                     u8 uIndexOfRetParam = procInfo.uInParamsCount;
@@ -591,10 +624,10 @@ local_func void winx64_backend_on_emit_proc(u64 uAsIR, WinX64BackendCtx* pCtx)
 
                         case EWin64ParamKind::EPARAM_KIND_REF: {
                             // TODO: CLEANUP: CHECK:
-                            // 1) Atm, we do *not* follow the winx64 rule that params by ref should be 16-bytes aligned. And we do
+                            // 1) Atm, we do *not* follow the windows x64 ABI rule that params by ref should be 16-bytes aligned. And we do
                             //    *not* make a local copy. We indeed only pass a ref without a copy: very fast, and can ref anything
                             //    (including consts, etc)... However, C functions have the right to modify such param values => they may
-                            //    require a copy (LOC functions, to the contrary, do not... unless in case of volatile maybe).
+                            //      require a copy (LOC functions, to the contrary, do not...).
                             //    => either this is always ok, or we need to fix it here, and/or we need to warn users that any such struct
                             //       must be "user-declared" as 16-bytes aligned... and/or we need to provide a way to flag for forced copy...
                             // 2) We'll probably need to ensure in the future, at least in some cases, that such a copy is actually performed,
@@ -1551,6 +1584,10 @@ local_func u32 winx64_backend_emit_all_to(PlatformFileHandle file, u64 uIRofMain
     Assert(WINX64_SETCONSOLECP_INDEX_IN_KERNEL32_DLL == pReqKernel32->vecSymbolNames.size(), "Mismatch hardcoded index for SetConsoleCP in Kernel32.dll");
     auto itInsertSetConsoleCP = pReqKernel32->mapAlreadyRegisteredSymbols.insert("SetConsoleCP", WINX64_SETCONSOLECP_INDEX_IN_KERNEL32_DLL);
     pReqKernel32->vecSymbolNames.append(itInsertSetConsoleCP.key());
+
+    //
+    // TODO: also force import of __chkstack from kernelbase.dll
+    //
 
     {
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL5_SIGNIFICANT_STEP, EventREPT_CUSTOM_HARDCODED(

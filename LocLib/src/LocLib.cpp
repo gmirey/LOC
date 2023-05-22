@@ -1,3 +1,17 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
 
 #define CHECK_ASSERTS                   true
 
@@ -9,7 +23,7 @@
 #if 1
 
 // TMP TMP TMP
-#define TRACE_PRE_PARSER_PRINTLEVEL         1
+#define TRACE_PRE_PARSER_PRINTLEVEL         1   // TODO: replace traces there with new system 
 // TMP TMP TMP
 
 #define DISABLE_ALL_TRACES                          0
@@ -48,7 +62,7 @@
 #else
 
 // TMP TMP TMP
-#define TRACE_PRE_PARSER_PRINTLEVEL         4
+#define TRACE_PRE_PARSER_PRINTLEVEL         4 // TODO: replace traces there with new system 
 // TMP TMP TMP
 
 #define DISABLE_ALL_TRACES                          0
@@ -102,6 +116,7 @@
 #include "../../bak/TmpParserState.h.bak"
 #endif
 
+// Called by the 'user interface' to the compiler DLL; to know about errors
 exported_func_impl bool hasErrors(WholeProgramCompilationState* pProgCompState)
 {
     u32 uSourceFileCount = pProgCompState->vecSourceFiles.size();
@@ -115,6 +130,7 @@ exported_func_impl bool hasErrors(WholeProgramCompilationState* pProgCompState)
     return false;
 }
 
+// Intended ? but no longer... called by the 'user interface' to the compiler DLL. Now we pack up those results ourselves by calling that.
 exported_func_impl void prepare_results(WholeProgramCompilationState* pProgCompState,
 	LocLib_OS_WrapperFunctions* pOsFuncs, 
 	LocLib_CompilationParams* pCompilationParams,
@@ -791,6 +807,8 @@ local_func void handle_next_tc_task(int iSourceFileIndexToTC, WorkerDesc* pWorke
 
     pTCContext->pWorker = pWorkerDesc;
 
+    // Note: we no longer 'copy' lagged states.
+    // TODO: give this architecture a great deal more thoughts and actual testing once we have Multithreading.
     #if 0
     for (auto it = pSourceFile->mapReferencedOtherSources.begin(),
               itEnd = pSourceFile->mapReferencedOtherSources.end() ; it != itEnd; it++) {
@@ -814,12 +832,6 @@ local_func void handle_next_tc_task(int iSourceFileIndexToTC, WorkerDesc* pWorke
             on_procbody_tc_task_on_error_return_once_locked_task_manager(pTCContext, pCompState, oCompilationResults);
         }
     } else if (pTCContext->eKind == ECTXKIND_COMPOUND) { Assert_(pTCContext->pCompoundToTC);
-        #if 0
-        {
-            FFString strId = get_identifier_string(pCompState, pTCContext->pCompoundToTC->iPrimaryIdentifier);
-            int iCoucou = 1;
-        }
-        #endif
         if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
             auto itFindAsWaitingPossiblyRuntime = pTCContext->pCompoundToTC->setWaitingPossiblyRuntime.find(pTCContext);
             if (itFindAsWaitingPossiblyRuntime != pTCContext->pCompoundToTC->setWaitingPossiblyRuntime.end()) {
@@ -877,15 +889,14 @@ local_func void handle_put_worker_to_sleep(WorkerDesc* pWorkerDesc, WholeProgram
 }
 
 local_func void run_parse_and_tc_worker(WorkerDesc* pWorkerDesc,
-    WholeProgramCompilationState* pCompState, LocLib_CompilationResults* oCompilationResults) {
+    WholeProgramCompilationState* pCompState, LocLib_CompilationResults* oCompilationResults)
+{
     
-    // TODO: thread sync !!!
-
     while (true) {
 
         acquire_task_manager_lock(pCompState, pWorkerDesc);
         
-        if (pWorkerDesc->bAllowParse) {
+        if (pWorkerDesc->bAllowParse) { // only *one* worker out of all should be allowed to parse
             if (pCompState->mapOfParseSourceFileTasksToLaunch.size()) {
                 auto it = pCompState->mapOfParseSourceFileTasksToLaunch.begin();
                 int iSourceFileIndexToParse = it.key();
@@ -900,7 +911,7 @@ local_func void run_parse_and_tc_worker(WorkerDesc* pWorkerDesc,
             }
         }
 
-        if (pWorkerDesc->bAllowTC) {
+        if (pWorkerDesc->bAllowTC) { // a priori all of them... TODO: maybe have a priority system instead ?
             if (pCompState->setOfFilesWithTCTasksToLaunch.size()) {
                 auto it = pCompState->setOfFilesWithTCTasksToLaunch.begin();
                 int iSourceFileIndexToTC = *it;
@@ -966,6 +977,7 @@ local_func void emit_unfinished_gathermore_errors(ArrayView<TCContext*> vecWaiti
     emit_waiting_task_errors(vecWaiting, RERR_STILL_SLEEPING_WAITGATHERMORE, "continuation waiting for an untriggered 'gathermore' event... circular or conditional-deadlock guarding definitions ???");
 }
 
+// logs some single event in our logs to a buffer... intented for logging to file in the end: impl detail of 'log_traces_to_file', below
 local_func_inl u32 log_event_to_buffer(char* pBuffer, const TracableEvent& eventToLog, u8 uIndent)
 {
     int iCharsWritten = 0;
@@ -983,7 +995,8 @@ local_func_inl u32 log_event_to_buffer(char* pBuffer, const TracableEvent& event
     return u32(iCharsWritten);
 }
 
-// TODO: a multi-orker version
+// logs all events in our log to a file.
+// TODO: a multi-worker version
 local_func void log_traces_to_file(WholeProgramCompilationState* pProgState, WorkerDesc* pWorker, StringView fileName) {
 
     static_assert(TRACABLE_EVENTS_KEEP_FULL_LOG, "allo?");
@@ -1029,6 +1042,10 @@ local_func void log_traces_to_file(WholeProgramCompilationState* pProgState, Wor
     platform_close_file(logFile);
 }
 
+// ***************************************************************************************
+// Currently our main "entry point" for our compiler DLL, called from our user-interface.
+//    Yes, we intend to be able to run compiler from elsewhere. IDE partial run on a file... dunno, something.
+// ***************************************************************************************
 exported_func_impl bool run_loc_compiler_from_first_file(
     int iFirstFileIndex,
 	LocLib_OS_WrapperFunctions* pOsFuncs, 
@@ -1095,9 +1112,6 @@ exported_func_impl bool run_loc_compiler_from_first_file(
         // Only then, can we assign reserved words to their values (lots of them will indeed point to types ids we just defined)
         pProgCompilationState->init_reserved_words_values(&mainWorker);
     }
-
-    // TMP TMP TMP : output results validating our Arbitrary-Precision library
-    //doVisuTests(&progCompilationState.chunkProvider);
 
     if (!register_source_file(iFirstFileIndex, -1, -1, pProgCompilationState, pOsFuncs, pCompilationParams, oCompilationResults)) {
         prepare_results_and_return(true);

@@ -1,11 +1,22 @@
+// Part of LocLang/WinCmd
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 
 #include "../../HighPerfTools/BaseDecls.h"
-//#include "../../HighPerfTools/Platform_API.h"
 #include "../../LocLib/src/LocLib_Cmd_API.h"
 #include "../../LocLib/src/LocLib_Token.h"
-
-//#include "../../LocLib/src/LocLib_PreParserTypes.h"       // TODO: reorg this so that less impl details are needed for pGetSourceFileTokenizerFn
-//#include "../../LocLib/src/LocLib_SourceFileDescAndState.h"
 
 #define UNICODE
 #include <windows.h>
@@ -438,7 +449,6 @@ static std::wstring _convert_to_full_path_utf16(std::string sPathFromRootUTF8)
 
 int get_source_file_index(int iOpenerIndex, const char* pRelativeFileName, i16 iFileNameByteSize, u16* outError)
 {
-    // TODO: put all that behind lock for multithread
     assert(iOpenerIndex >= 0);
     assert(iOpenerIndex < int(g_vecAllRegistered.size()));
     RegisteredSourceFile& registeredOpener = g_vecAllRegistered[iOpenerIndex];
@@ -480,7 +490,6 @@ int get_source_file_full_name_byte_count(int iSourceFileIndex)
 
 int get_source_file_full_name(int iSourceFileIndex, char* szFileNameBufferMax4096)
 {
-    // TODO: put all that behind lock for multithread
     assert(iSourceFileIndex >= 0);
     assert(iSourceFileIndex < int(g_vecAllRegistered.size()));
     RegisteredSourceFile& registered = g_vecAllRegistered[iSourceFileIndex];
@@ -491,7 +500,6 @@ int get_source_file_full_name(int iSourceFileIndex, char* szFileNameBufferMax409
 
 bool get_source_file_tokenizer(int iSourceFileIndex, TokenizerClosure* outTokenizer, u16* outError)
 {
-    // TODO: put all that behind lock for multithread
     assert(iSourceFileIndex >= 0);
     assert(iSourceFileIndex < int(g_vecAllRegistered.size()));
     RegisteredSourceFile& registered = g_vecAllRegistered[iSourceFileIndex];

@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_PROGRAM_H_
@@ -17,7 +32,6 @@
 #include "LocLib_Postparser.h"
 #include "LocLib_TypeChecker.h"
 #include "LocLib_ir_dump.h"
-//#include "LocLib_c_backend.h"
 
 #include "LocLib_PE.h"
 #include "LocLib_x64.h"
@@ -26,6 +40,16 @@
 // TODO : remove dependency to crt
 #include <cstdio>
 #include <cstdlib>
+
+//
+// TODO: we'll probably need to revise our scan-like-and-tok strategy to iron out the weirdness of current parsing wrt multiline and blocks...
+// => Maybe when parsing a new line with actual tokens, shall we lookahead for the *next* line with actual tokens, and decide *purely* based
+// on indentation, whether it is a multiline continuation, or a child block, or a sibling statement. Currently, the decision system about
+// multiline is like an hybrid between indentation based, and previous-line-contents-based... which does not "feel" that great in the end.
+// It would be simpler to have a purely indentation based system.
+// Also, we can gather all indentation info in the scanner => we could thus very easily "mock" a correct indentation in the IDE to try out
+//   indentation 'corrections'-proposals, when we're on an IDE-provided parsing configuration.
+//
 
 // GetNextLineTokens_Sign
 exported_func_impl int get_next_line_tokens_when_reading_full_file(
@@ -1495,8 +1519,13 @@ local_func bool process_whole_backend(WholeProgramCompilationState* progCompilat
         }
     }
 
+    // TODO ?? add some 'hardcoded' implementations of a few things *in LOC*, to add to the set of stuff to include there ?
+    // TODO: or maybe even, not *hardcoded* ?
+    // --> The code around invocation of main ? the global error handler ? other stuff such as core types, or even decl of 'builtins' ??
+
     // TODO: accept compilation as library, by adding all "public" declarations to the sets of entities
     //   touched by existence requirement, instead of starting from 'main'
+
     TCProcBodyResult* pBodyOfMain = backend_find_proc_main(progCompilationState, pWorker);
     if (pBodyOfMain) {
         u64 uIRofMain = ir_make_procbody_ref_in_file(u32(pBodyOfMain->iSourceFileIndex), pBodyOfMain->uRegistrationIndex);
@@ -1527,174 +1556,6 @@ local_func bool process_whole_backend(WholeProgramCompilationState* progCompilat
         // TODO: report error
         platform_log_error("*** could not find entry point: 'main'", true);
     }
-
-    #if 0
-
-    const char* szTmpCBackendFileGlobalsHeader = "testCBackendGlobals.h";
-    const char* szTmpCBackendFile = "testCBackend.cpp";
-    const char* szDirectExe = "testWinX64Backend.exe";
-    platform_log_info("process_whole_backend() temporarily implemented as emitting C to ", false);
-    platform_log_info(szTmpCBackendFile, true);
-
-    PlatformFileHandle fileGlobals = platform_open_file_for_writing(szTmpCBackendFileGlobalsHeader, &err);
-    if (fileGlobals) {
-        PlatformFileHandle fileBodies = platform_open_file_for_writing(szTmpCBackendFile, &err);
-        if (fileBodies) {
-            platform_write_to_file(fileGlobals, (u8*)szCBackendHeader, u32(sizeof(szCBackendHeader) - 1));
-            const char szStartFileNamesDef[] = "static const char* tFileNames__[] = {\n";
-            platform_write_to_file(fileGlobals, (u8*)szStartFileNamesDef, u32(sizeof(szStartFileNamesDef) - 1));
-            u32 uSourceFileCount = progCompilationState->vecSourceFiles.size();
-            for (u32 uFile = 0; uFile < uSourceFileCount; uFile++) {
-                SourceFileDescAndState* pSourceFile = progCompilationState->vecSourceFiles[uFile];
-                char tFileNameLineBuffer[1024];
-                tFileNameLineBuffer[0] = '\t';
-                tFileNameLineBuffer[1] = '\"';
-                char* pCurrent = tFileNameLineBuffer + 2;
-                u32 uByteCount = pSourceFile->sourceFileName.byte_length();
-                for (u32 uByte = 0; uByte < uByteCount; uByte++) {
-                    u8 c = pSourceFile->sourceFileName.begin()[uByte];
-                    Assert_(c); // should not reach char 0
-                    if (c == u8('\\')) {
-                        *pCurrent++ = '\\';
-                        *pCurrent++ = '\\';
-                    } else {
-                        *pCurrent++ = char(c);
-                    }
-                }
-                *pCurrent++ = '\"';
-                *pCurrent++ = ',';
-                *pCurrent++ = '\n';
-                *pCurrent = 0;
-                platform_write_to_file(fileGlobals, (u8*)tFileNameLineBuffer, u32(pCurrent - tFileNameLineBuffer));
-            }
-            platform_write_to_file(fileGlobals, (u8*)"};\n", u32(sizeof("};\n") - 1));
-            platform_write_to_file(fileGlobals, (u8*)szCBackendOnErrorDef, u32(sizeof(szCBackendOnErrorDef) - 1));
-
-            const char szIncludeGlobals[] = "#include \"testCBackendGlobals.h\"\n\n";
-            platform_write_to_file(fileBodies, (u8*)szIncludeGlobals, u32(sizeof(szIncludeGlobals) - 1));
-
-            // TODO: accept compilation as library, by adding all "public" declarations to the sets of entities
-            //   touched by existence requirement, instead of starting from 'main'
-            TCProcBodyResult* pBodyOfMain = backend_find_proc_main(progCompilationState);
-            if (pBodyOfMain) {
-                platform_log_debug("- - - - - - starting emission to c backend, as-required from proc 'main' - - - - - - - -", true);
-                Arena tmpArena = pWorker->tmpArena;
-                ArenaRefPoint refBefore = get_arena_ref_point(tmpArena);
-                FireAndForgetArenaAlloc ffAlloc(tmpArena);
-                CBckContext context;
-                context.pIsolatedSourceFile = 0;
-                context.pCompilationParams = pCompilationParams;
-                context.pWorker = pWorker;
-                context.pProgCompilationState = progCompilationState;
-                context.vecOfDeclarationsToEmit.init(ffAlloc);
-                context.vecOfDeclarationsOnHold.init(ffAlloc);
-                context.vecOfProcBodiesToEmit.init(ffAlloc);
-                context.fileForGlobalDecls = fileGlobals;
-                context.fileForProcBodies = fileBodies;
-                context.secondaryTmpArena = secondaryTmpArena;
-
-                char szBuffer[2048];
-                sprintf(szBuffer,   "\nstatic FORCE_INLINE int main(int argc, char* argv[])\n"
-                                    "{\n"
-                                    "\treturn (int)");
-                c_backend_emit_name_of_proc_to_buffer(szBuffer+strlen(szBuffer), pBodyOfMain, &context);
-                sprintf(szBuffer+strlen(szBuffer),          "();\n"
-                                    "}\n\n\n");
-                platform_write_to_file(fileBodies, (u8*)szBuffer, u32(strlen(szBuffer)));
-
-                bool expectedFalse = c_backend_on_reference_append_or_return_is_already_marked(pBodyOfMain->uIRofProcDecl, 0, &context);
-                Assert_(!expectedFalse);
-
-                CBckProcBody bckProcBody;
-                bckProcBody.vecOfLocalConstDeclToEmit.init(ffAlloc);
-                
-                { emission_loop:
-
-                    u32 uCountDecls = context.vecOfDeclarationsToEmit.size();
-                    if (uCountDecls) {
-                        for (u32 uIndex = 0u; uIndex < uCountDecls; uIndex++) {
-                            u64 uIRtoEmit = context.vecOfDeclarationsToEmit[uIndex];
-                            if (!c_backend_try_emit_declaration(uIRtoEmit, &context))
-                                context.vecOfDeclarationsOnHold.append(uIRtoEmit);
-                        }
-                        context.vecOfDeclarationsToEmit.clear();
-                    }
-
-                    u32 uCountOnHold = context.vecOfDeclarationsOnHold.size();
-                    if (uCountOnHold) {
-                        TmpStackOptiArray<u64, 256u> onHoldAfter(tmpArena);
-                        for (u32 uIndex = 0u; uIndex < uCountOnHold; uIndex++) {
-                            u64 uIRtoEmit = context.vecOfDeclarationsOnHold[uIndex];
-                            if (!c_backend_try_emit_declaration(uIRtoEmit, &context))
-                                onHoldAfter.append(uIRtoEmit);
-                        }
-                        if (onHoldAfter.size() == uCountOnHold && context.vecOfDeclarationsToEmit.size() == 0) {
-                            // count on hold didn't shrink, and count to try to emit first hand is still empty
-                            //   => possibly a circular dependendy error there ?
-                            //   => stop to avoid deadlock.
-                            // TODO: emit circular dependency error
-                            // TODO: launch an actual specialized circular-dependency finder for better report.
-                            platform_log_error("*** c-backend : a circular dependency was probably found within declarations... aborting. (Report TODO).");
-                            return false;
-                        }
-                        context.vecOfDeclarationsOnHold.clear();
-                        context.vecOfDeclarationsOnHold.append_all(onHoldAfter);
-                        goto emission_loop;
-                    }
-
-                    if (context.vecOfProcBodiesToEmit.size()) {
-                        u64 uIRofDeclOfProcToEmit = context.vecOfProcBodiesToEmit.pop_last();
-                        TCProcBodyResult* pProcResult = get_proc_body_from_decl_ir(uIRofDeclOfProcToEmit, progCompilationState);
-                        bckProcBody.pProcResult = pProcResult;
-                        bckProcBody.strProcName = pProcResult->iPrimaryIdentifier > 0 ?
-                            get_identifier_stringview(progCompilationState, pProcResult->iPrimaryIdentifier) : StringView("<anonymous>");
-                        c_backend_emit_proc_body(&bckProcBody, &context);
-                        u32 uLocalConstDecls = bckProcBody.vecOfLocalConstDeclToEmit.size();
-                        if (uLocalConstDecls) {
-                            u16 uSourceLoc = u16(pProcResult->iSourceFileIndex + IR_REPO_FILE_OFFSET);
-                            u64 uPseudoIRBase = (u64(uSourceLoc) << IR_STD_REPO_SHIFT) | BCK_FLAG_DECL_IS_LOCAL_CONST | u64(pProcResult->uRegistrationIndex);
-                            for (u32 uIndex = 0; uIndex < uLocalConstDecls; uIndex++) {
-                                u32 uPos = bckProcBody.vecOfLocalConstDeclToEmit[uIndex];
-                                context.vecOfDeclarationsToEmit.append(uPseudoIRBase | (u64(uPos) << IR_STD_PARAM_SHIFT));
-                            }
-                            bckProcBody.vecOfLocalConstDeclToEmit.clear();
-                        }
-                        goto emission_loop;
-                    }
-                }
-
-                platform_log_debug("- - - - - - done emitting to c backend - - - - - - - -", true);
-                reset_arena_to(refBefore, tmpArena);
-
-                PlatformFileHandle fileDirectExe = platform_open_file_for_writing(szDirectExe, &err);
-                if (fileDirectExe) {
-                    platform_log_debug("- - - - - - starting emission to direct exe, as required from proc 'main' - - - - - - - -", true);
-                    ArenaRefPoint refBeforeDirectExe = get_arena_ref_point(tmpArena);
-                    winx64_backend_emit_all_to(fileDirectExe, pBodyOfMain->uIRofProcDecl, progCompilationState, pWorker, secondaryTmpArena);
-                    reset_arena_to(refBeforeDirectExe, tmpArena);
-                    platform_log_debug("- - - - - - done emitting to direct exe - - - - - - - -", true);
-                    platform_close_file(fileDirectExe);
-                }
-
-            } else {
-                // TODO: report error
-                platform_log_error("*** could not find entry point: 'main'", true);
-            }
-
-            platform_close_file(fileBodies);
-        } else {
-            // TODO: report error
-            platform_log_error("*** could not open for writing : ", false);
-            platform_log_info(szTmpCBackendFile, true);
-        }
-        platform_close_file(fileGlobals);
-    } else {
-        // TODO: report error
-        platform_log_error("*** could not open for writing : ", false);
-        platform_log_info(szTmpCBackendFileGlobalsHeader, true);
-    }
-
-    #endif
 
     return true;
 }

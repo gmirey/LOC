@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_DEBUG_PRINT_H_
@@ -7,6 +22,12 @@
 #include "LocLib_Cmd_API.h"
 #include "LocLib_ScanAndTok.h"
 #include "LocLib_PreParserTypes.h"
+
+//
+//
+// This file is about a legacy print of parsed nodes while working on the parser quite some time ago... to be removed short term in favor of new traces
+// 
+//
 
 // TODO: remove dependency to crt
 #include <stdio.h>

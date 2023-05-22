@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_TC_CONST_SEMANTICS_H_
@@ -6,6 +21,11 @@
 #include "../../HighPerfTools/BaseDecls.h"
 #include "LocLib_TypeCheckerCore.h"
 
+
+//
+// TODO: Cleanup
+//
+#if 0
 
 local_func bool has_stringview_const_semantics(NodeValue* pValue, MetaValueIR metaValue, TCContext* pTCContext, bool bAllowNonConstOnFlags,
     StringView* optStringResult)
@@ -120,7 +140,7 @@ local_func_inl bool has_compact_string_const_semantics_to_ff(NodeValue* pValue, 
 }
 
 
-
+#endif
 
 #endif // LOCLIB_TC_CONST_SEMANTICS_H_
 

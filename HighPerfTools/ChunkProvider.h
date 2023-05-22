@@ -1,3 +1,18 @@
+// Part of LocLang/HighPerfTools
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once
 
 #include "BaseDecls.h"  // basic stuff for everything
@@ -346,8 +361,8 @@ ChunkHandle ChunkProvider::allocate_large_chunk(u32 uByteSize)
     Assert_(uByteSize > CHUNK_PROVIDER_REGULAR_CHUNK_SIZE && "Min alloc as 'large' Chunk is 132 KB");
     Assert_(uByteSize < MAX_ALLOC_IN_LARGE_PAGE && "Max alloc as 'large' Chunk is 4 MB");
     Assert_(0 == (uByteSize & 0x0FFFu) && "Chunk size should be multiple of 4 KB");
-    // TODO
-    Assert_(false);
+    // TODO !!!!
+    Assert(false, "ChunkProvider::allocate_large_chunk not yet implemented !!!"); // Note: some first shot of an impl was #define'd out, below
     ChunkHandle result;
     return result;
 }
@@ -360,8 +375,8 @@ ChunkHandle ChunkProvider::allocate_huge_chunk(u64 uByteSize)
     }
     Assert_(uByteSize > MAX_ALLOC_IN_LARGE_PAGE && "Min alloc as 'huge' Chunk is over 4 MB");
     Assert_(0 == (uByteSize & 0x0FFFu) && "Chunk size should be multiple of 4 KB");
-    // TODO
-    Assert_(false);
+    // TODO !!!!
+    Assert(false, "ChunkProvider::allocate_huge_chunk not yet implemented !!!"); // Note: some first shot of an impl was #define'd out, below
     ChunkHandle result;
     return result;
 }
@@ -444,8 +459,8 @@ void ChunkProvider::release_large_chunk(ChunkHandle handle, u32 uChunkSize)
     Assert_(uChunkSize > CHUNK_PROVIDER_REGULAR_CHUNK_SIZE && "Min alloc as 'large' Chunk is 132 KB");
     Assert_(uChunkSize < MAX_ALLOC_IN_LARGE_PAGE && "Max alloc as 'large' Chunk is 4 MB");
     Assert_(0 == (uChunkSize & 0x0FFFu) && "Chunk size should be multiple of 4 KB");
-    // TODO
-    Assert_(false);
+    // TODO !!!!
+    Assert(false, "ChunkProvider::release_large_chunk not yet implemented !!!"); // Note: some first shot of an impl was #define'd out, below
 }
 
 void ChunkProvider::release_huge_chunk(ChunkHandle handle, u64 uChunkSize)
@@ -456,8 +471,8 @@ void ChunkProvider::release_huge_chunk(ChunkHandle handle, u64 uChunkSize)
     }
     Assert_(uChunkSize > MAX_ALLOC_IN_LARGE_PAGE && "Min alloc as 'huge' Chunk is over 4 MB");
     Assert_(0 == (uChunkSize & 0x0FFFu) && "Chunk size should be multiple of 4 KB");
-    // TODO
-    Assert_(false);
+    // TODO !!!!
+    Assert(false, "ChunkProvider::release_huge_chunk not yet implemented !!!"); // Note: some first shot of an impl was #define'd out, below
 }
 
 void ChunkProvider::release_chunk(ChunkHandle handle, u64 uChunkSize)

@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_WINX64_BACKEND_BASE_H_
@@ -65,22 +80,22 @@ struct WinX64BackendCtx : public IRAwareContext {
     TmpArray<u64> vecProcDeclarationsToEmit;      // 64b IR of a proc which is referenced in code
     TmpArray<u32*> vecTables32bInfo;
 
-    TmpArray<u32> vecOffsetsInCodeToPatchWithConstStart;        // offsets within code section, where a 32b relative-to-IP was written, to a position in const section. Currently written knowing actual virtual address of code section and offset-in-const, but as-if const section started at virtual address 0.
-    TmpArray<u32> vecOffsetsInCodeToPatchWithGlobIniStart;      // offsets within code section, where a 32b relative-to-IP was written, to a position in global ini section. Currently written knowing actual virtual address of code section and offset-in-global-ini, but as-if global ini section started at virtual address 0.
-    TmpArray<u32> vecOffsetsInCodeToPatchWithGlobZeroStart;     // offsets within code section, where a 32b relative-to-IP was written, to a position in global zeroed section. Currently written knowing actual virtual address of code section and offset-in-global-zeroed, but as-if global zeroed section started at virtual address 0.
-    TmpArray<u32> vecOffsetsInCodeToPatchWithImportStart;       // offsets within code section, where a 32b relative-to-IP was written, to a position in import section. Currently written knowing actual virtual address of code section and offset-in-import, but as-if import section started at virtual address 0.
+    TmpArray<u32> vecOffsetsInCodeToPatchWithConstStart;        // offsets within code section, where a 32b relative-to-IP was written, to a position in const section. Currently written knowing IP-offset and offset-in-const, but as-if (VaCode - VaConst) was 0.
+    TmpArray<u32> vecOffsetsInCodeToPatchWithGlobIniStart;      // offsets within code section, where a 32b relative-to-IP was written, to a position in global ini section. Currently written knowing IP-offset and offset-in-global-ini, but as-if (VaCode - VaIni) was 0.
+    TmpArray<u32> vecOffsetsInCodeToPatchWithGlobZeroStart;     // offsets within code section, where a 32b relative-to-IP was written, to a position in global zeroed section. Currently written knowing IP-offset and offset-in-global-zeroed, but as-if (VaCode - VaZero) was 0.
+    TmpArray<u32> vecOffsetsInCodeToPatchWithImportStart;       // offsets within code section, where a 32b relative-to-IP was written, to a position in import section. Currently written knowing IP-offset and offset-in-import, but as-if (VaCode - VaImport) was 0.
 
     TmpMap<u64, NotYetEmittedProc> mapVecNotYetEmittedByProc;   // By-IR of not-yet emitted proc.
 
-    TmpArray<u32> vecOffsetsInConstReferringToAddressOfConst;           // offsets within const section, where a 64b address was written, to another position in const section. Currently written as-if const section started at absolute address 0. May also be added to the positions requiring auto-patch by loader...
-    TmpArray<u32> vecOffsetsInConstReferringToAddressOfGlobIni;         // offsets within const section, where a 64b address was written, to another position in glob-ini section. Currently written as-if glob-ini section started at absolute address 0. May also be added to the positions requiring auto-patch by loader...
-    TmpArray<u32> vecOffsetsInConstReferringToAddressOfGlobZero;        // offsets within const section, where a 64b address was written, to another position in glob-zero section. Currently written as-if glob-zero section started at absolute address 0. May also be added to the positions requiring auto-patch by loader...
-    TmpArray<u32> vecOffsetsInConstReferringToAddressOfProc;            // offsets within const section, where a 64b address was written, to the address of a proc. Currently written as-if code section started at absolute address 0. May be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInConstReferringToAddressOfConst;           // offsets within const section, where a 64b address was written, to another position in const section. Currently written as-if const section started at absolute address 0. Shall also be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInConstReferringToAddressOfGlobIni;         // offsets within const section, where a 64b address was written, to another position in glob-ini section. Currently written as-if glob-ini section started at absolute address 0. Shall also be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInConstReferringToAddressOfGlobZero;        // offsets within const section, where a 64b address was written, to another position in glob-zero section. Currently written as-if glob-zero section started at absolute address 0. Shall also be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInConstReferringToAddressOfProc;            // offsets within const section, where a 64b address was written, to the address of a proc. Currently written as-if code section started at absolute address 0. Shall be added to the positions requiring auto-patch by loader...
 
-    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfConst;         // offsets within global ini section, where a 64b address was written, to a position in const section. Currently written as-if const section started at absolute address 0. May also be added to the positions requiring auto-patch by loader...
-    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfGlobIni;       // offsets within global ini section, where a 64b address was written, to a position in glob-ini section. Currently written as-if const section started at absolute address 0. May also be added to the positions requiring auto-patch by loader...
-    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfGlobZero;      // offsets within global ini section, where a 64b address was written, to a position in glob-zero section. Currently written as-if const section started at absolute address 0. May also be added to the positions requiring auto-patch by loader...
-    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfProc;          // offsets within global ini section, where a 64b address was written, to the address of a proc. Currently written as-if code section started at absolute address 0. May be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfConst;         // offsets within global ini section, where a 64b address was written, to a position in const section. Currently written as-if const section started at absolute address 0. Shall also be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfGlobIni;       // offsets within global ini section, where a 64b address was written, to a position in glob-ini section. Currently written as-if const section started at absolute address 0. Shall also be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfGlobZero;      // offsets within global ini section, where a 64b address was written, to a position in glob-zero section. Currently written as-if const section started at absolute address 0. Shall also be added to the positions requiring auto-patch by loader...
+    TmpArray<u32> vecOffsetsInGlobIniReferringToAddressOfProc;          // offsets within global ini section, where a 64b address was written, to the address of a proc. Currently written as-if code section started at absolute address 0. Shall also be added to the positions requiring auto-patch by loader...
 
     TmpArray<TmpArray<u32>> vecOfSalvageableVec32s;             // when we remove a tmp vector from a map, we can put it right here to be able to reuse its (tmp!) alloc.
 

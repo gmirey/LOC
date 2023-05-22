@@ -1,3 +1,18 @@
+// Part of LocLang/Compiler
+// Copyright 2022-2023 Guillaume Mirey
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License. 
+
 #pragma once 
 
 #ifndef LOCLIB_PE_H_
@@ -389,7 +404,7 @@ local_func u32 pe_write_file_section(PlatformFileHandle file, const FileSection*
     return uCountBytes;
 }
 
-// A zero-terminated array of those structures should be found at start of .idata section. TODO: what references this, apart from section name ???
+// A zero-terminated array of those structures should be found at start of .idata section.
 struct IMAGE_IMPORT_DESCRIPTOR {
     union {
         u32   Characteristics;
@@ -398,7 +413,7 @@ struct IMAGE_IMPORT_DESCRIPTOR {
     u32 TimeDateStamp;                  // 0 for unbound
     u32 ForwarderChain;                 // 0 is maybe ok ?
     u32 Name;                           // RVA of a name (zero-terminated ?)
-    u32 FirstThunk;                     // RVA of the IAT. IAT should be same sized and same-filled than ILT (but at a distinct address) ?
+    u32 FirstThunk;                     // RVA of the IAT. IAT should be same sized and same-filled than ILT (but at a distinct address)
                                         //      On load, will be replaced with actual addresses of imported functions (or more generally symbols?).
 };
 static_assert(sizeof(IMAGE_IMPORT_DESCRIPTOR) == 20u, "hola?");
@@ -412,5 +427,31 @@ struct IMAGE_IMPORT_BY_NAME {
     u8  Name[1];                        // trailing array, zero terminated.
 };
 
+
+//
+// TODO: actually emit those RUNTIME_FUNCTION and UNWIND_INFO structures in .pdata (and look for what should reference this)
+// It shall not be omitted, otherwise we'd totally be in outer space as far as the OS is concerned if we were to ever trigger a fault,
+//   a c++ exception, whatever...
+//
+
+// Apparently should go in the .pdata section, one for each non-leaf function, and sorted
+// What "references" this as being a table with that info is in fact the "ExceptionTable" directory entry
+struct RUNTIME_FUNCTION { // Shall be DWORD-Aligned in image
+    u32 uStartAddress;      // "image-relative" : RVA
+    u32 uEndAddress;        // "image-relative" : RVA
+    u32 uUnwindInfoAddress; // "image-relative" : RVA
+};
+
+// Where to ? also .pdata ?
+struct UNWIND_INFO {     // Shall be DWORD-Aligned in image
+    u8 VersionAndFlags;         // 3lsb version, 5msb flags
+    u8 SizeOfProlog;
+    u8 CountOfUnwindCodes;      // in fact count of UNWIND_CODE entries ; each actual 'code' may spawn several such entries
+    u8 FrameRegisterAndOffset;  // 4lsb frameregister, 4msb frameregisteroffset
+    u16 tUnwindCodeArray[2];    // trailing... 
+};
+
+struct UNWIND_CODE {
+};
 
 #endif // LOCLIB_PE_H_
