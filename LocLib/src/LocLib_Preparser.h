@@ -2832,7 +2832,7 @@ declare_statement_parsing_fn(special_using)
     if (!pWhatToUse) {
         make_err_pre_node_expected_vs_found(pWhatToUse, 0, "expected expression or list after 'using'");
     }
-    pStatement->pMainNode = pWhatToUse; // can be null, but empty return is okay
+    pStatement->pMainNode = pWhatToUse;
 }
 
 // PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
@@ -2842,8 +2842,34 @@ declare_statement_parsing_fn(pan_opening)
     debug_print_indent(uDepthGuard*2 + 1);
     platform_log_info("> pan-statement of the form 'expects-expression [and block-opening]'", true);
 #endif
-    // TODO
-    Assert(false, "not yet implemented");
+    Token* pCurrent = parserParams.parserState.pCurrentToken;
+    reference_current_token_as(panSt);
+    pStatement->pivotToken1 = panSt;
+    u8 uStatementKind = ESTATEMENT_PAN_IF;
+    if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ELIF) {
+        uStatementKind = ESTATEMENT_PAN_ELIF;
+        pStatement->uStatementFlags |= ESTATEMENTFLAGS_BLOCK_ENDING_PAN_DIRECTIVE;
+    } else if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_SCOPE) {
+        uStatementKind = ESTATEMENT_PAN_SCOPE;
+    } else {
+        Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_IF);
+    }
+    pStatement->uStatementKind = uStatementKind;
+    pStatement->uExpectedNextBlockSpawning = EBLOCK_SPAWNING_PAN_DIRECTIVE;
+    pCurrent = ++parserParams.parserState.pCurrentToken;
+    if (pCurrent < parserParams.parserState.pLineTokenEnd) {
+        if (is_explicit_linebreak(pCurrent))
+            pCurrent = starting_true_eat_lines_while_eol_or_forced_break(parserParams, outError);
+        if (*outError) {
+            make_err_pre_node_during_multiline(pStatement->pMainNode, "After pan keyword");
+            return;
+        }
+    }
+    PreAstNode* pExpression = try_parse_expression_or_list(parserParams, true, true, 0, uDepthGuard, outError);
+    if (!pExpression) {
+        make_err_pre_node_expected_vs_found(pExpression, 0, "expected an expression after this pan keword");
+    }
+    pStatement->pMainNode = pExpression;
 }
 
 // PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
@@ -2853,8 +2879,18 @@ declare_statement_parsing_fn(pan_else)
     debug_print_indent(uDepthGuard*2 + 1);
     platform_log_info("> special pan-statement 'else'", true);
 #endif
-    // TODO
-    Assert(false, "not yet implemented");
+    Token* pCurrent = parserParams.parserState.pCurrentToken;
+    reference_current_token_as(panSt);
+    pStatement->pivotToken1 = panSt;
+    Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ELSE);
+    pStatement->uStatementKind = ESTATEMENT_PAN_ELSE;
+    pStatement->uStatementFlags |= ESTATEMENTFLAGS_BLOCK_ENDING_PAN_DIRECTIVE;
+    pStatement->uExpectedNextBlockSpawning = EBLOCK_SPAWNING_PAN_DIRECTIVE;
+    pCurrent = ++parserParams.parserState.pCurrentToken;
+    if (pCurrent < parserParams.parserState.pLineTokenEnd) {
+        make_err_pre_node_expected_vs_found(pStatement->pMainNode, 0, "Pan-else does not expect anything afterwards");
+        return;
+    }
 }
 
 // PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
@@ -2864,8 +2900,23 @@ declare_statement_parsing_fn(pan_closing)
     debug_print_indent(uDepthGuard*2 + 1);
     platform_log_info("> pan-statement of the form [block-closing-only]", true);
 #endif
-    // TODO
-    Assert(false, "not yet implemented");
+    Token* pCurrent = parserParams.parserState.pCurrentToken;
+    reference_current_token_as(panSt);
+    pStatement->pivotToken1 = panSt;
+    u8 uStatementKind = ESTATEMENT_PAN_ENDIF;
+    if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ENDSCOPE)
+        uStatementKind = ESTATEMENT_PAN_ENDSCOPE;
+    else {
+        Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ENDIF);
+    }
+    pStatement->uStatementKind = uStatementKind;
+    pStatement->uStatementFlags |= ESTATEMENTFLAGS_BLOCK_ENDING_PAN_DIRECTIVE;
+    pStatement->uExpectedNextBlockSpawning = EBLOCK_SPAWNING_NONE;
+    pCurrent = ++parserParams.parserState.pCurrentToken;
+    if (pCurrent < parserParams.parserState.pLineTokenEnd) {
+        make_err_pre_node_expected_vs_found(pStatement->pMainNode, 0, "Pan-closing does not expect anything afterwards");
+        return;
+    }
 }
 
 // Starting right after assign token => needs to check for possibly multiline continuation

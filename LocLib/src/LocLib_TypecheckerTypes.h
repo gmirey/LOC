@@ -117,14 +117,14 @@ struct TCBaseSourceBlock {
 
 // a specialization of an 'AST' block, for when it is known to be typechecked in a context allowing local declarations
 struct TCDeclSourceBlock : public TCBaseSourceBlock {
-    TmpMap<int, u32> mapBlockDeclarationsById;
+    TmpMap<int, u32>* pMapBlockDeclarationsById;
 };
 
 #define BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND     0x0001u // positionned on 'uKindFlagsOfParentStatement' of the TCSeqSourceBlock instanciated as the child of an else (or elif) block.
 
 // a specialization of an 'AST' block, for when it is known to be typechecked in the context of typechecking a proc-like body
 struct TCSeqSourceBlock : public TCDeclSourceBlock {
-    TmpArray<TCSeqSourceBlock*> vecDeferredBlocksInDeclOrder;
+    TmpArray<TCSeqSourceBlock*>* pVecDeferredBlocksInDeclOrder;
     TmpArray<u32>* pVecPlaceholdersToAfterBlockAndAfterElses; // general block exit ; and exit after when true in case block is an if (or elif)
     TmpArray<u32>* pVecPlaceholdersToElse;                  // in case block is child of an if (or elif), this is the vector to false
     u32 uIROfAfterBlock;                                    // after block emission, position of the next marker-jump target (considered as part of parent block)

@@ -60,17 +60,23 @@ local_func ETCResult typecheck_value_declaration_within_enum(TmpTCNode* pNode, u
     if (is_node_already_typechecked(pNode->pTCNode))
         return ETCResult::ETCR_SUCCESS;
 
+    //
+    // TODO !!!
+    // Atm enum *values* get typechecked asif they were of the *base type* of the enum... We want that to be the type of the enum instead, eventually.
+    // But when we do that, we'll need auto-casts *AND* type-matching for solving operators to allow the enum to be treated as int instead...
+    //
+
     Assert_(is_ctx_compound(pTCContext));
     Assert_(pTCContext->pCompoundToTC);
     Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM);
     TypeInfo_Enum* pEnumBeingTCed = (TypeInfo_Enum*)pTCContext->pCompoundToTC->pCompoundType;
     if (uNodeKind == ENodeKind::ENODE_ATOMICEXPR_IDENTIFIER) {
         int iIdentifierId = int(pNode->pTCNode->ast.uPrimaryPayload);
-        if (iIdentifierId > COUNT_RESERVED_WORDS) {
+        if (iIdentifierId >= COUNT_RESERVED_WORDS) {
             if (pEnumBeingTCed->mapAllMembers.find(iIdentifierId) == pEnumBeingTCed->mapAllMembers.end()) {
-
                 // TODO!!! also check no name conflict within current namespace, and taking into accound 'using', etc.
-
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("New Enum identifier ('%s') will be bound with default value",
+                    reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierId).c_str())), pTCContext->pWorker);
                 ValueBinding* pNewBinding = (ValueBinding*)alloc_from(pTCContext->pIsolatedSourceFile->localArena,
                     sizeof(ValueBinding), alignof(ValueBinding));
                 set_binding_source_ref(pNewBinding, pTCStatement, pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
@@ -86,6 +92,8 @@ local_func ETCResult typecheck_value_declaration_within_enum(TmpTCNode* pNode, u
                     EIntSemantics eSemantics = is_signed(pEnumBeingTCed->pBaseType) ? EINT_SEMANTIC_SIGNED : EINT_SEMANTIC_UNSIGNED;
                     u32 uFlags; MetaValueIR metaValue;
                     const IRInfo& infoPrev = pEnumBeingTCed->pLastValue->info;
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Last found value was %llu",
+                        infoPrev.metaValue.knownValue.uEmbeddedValue), pTCContext->pWorker);
                     EIRResult resultAddOne = ir_try_solve_add_or_sub_integral(uFormat, infoPrev, infoOne, 0uLL, eSemantics, pTCContext, &uFlags, &metaValue);
                     if (resultAddOne >= EIRResult::EIRR_FIRST_ERROR) {
                         return_error(pNode, pTCStatement, pTCContext, FERR_OTHER,
@@ -93,6 +101,8 @@ local_func ETCResult typecheck_value_declaration_within_enum(TmpTCNode* pNode, u
                     } else {
                         if (uFlags & IRFLAG_IS_KNOWN) {
                             Assert_(0u == (uFlags & IRFLAG_HAS_LOCAL_NYKA));
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("New value will be one more, thus %llu",
+                                metaValue.knownValue.uEmbeddedValue), pTCContext->pWorker);
                             pNewBinding->info.metaValue = metaValue;
                             ir_set_ir_and_flags_on_enum_value_info(uFormat, uFlags, &pNewBinding->info, pTCContext);
                         } else {
@@ -101,6 +111,7 @@ local_func ETCResult typecheck_value_declaration_within_enum(TmpTCNode* pNode, u
                         }
                     }
                 } else {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("First found => set to zero"), pTCContext->pWorker);
                     if (uFormat <= 0x03u) {
                         pNewBinding->info = ir_make_info_for_int_immediate(0, uFormat);
                         pNewBinding->info.uIRandMetaFlags |= IRFLAG_TC_SEMANTIC_CONST;
@@ -134,8 +145,10 @@ local_func ETCResult typecheck_value_declaration_within_enum(TmpTCNode* pNode, u
 
         if (u8(beforeEq.pTCNode->ast.uNodeKindAndFlags) == ENodeKind::ENODE_ATOMICEXPR_IDENTIFIER) {
             int iIdentifierId = int(beforeEq.pTCNode->ast.uPrimaryPayload);
-            if (iIdentifierId > COUNT_RESERVED_WORDS) {
+            if (iIdentifierId >= COUNT_RESERVED_WORDS) {
                 if (pEnumBeingTCed->mapAllMembers.find(iIdentifierId) == pEnumBeingTCed->mapAllMembers.end()) {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("New Enum identifier ('%s') will be bound with explicit value",
+                        reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierId).c_str())), pTCContext->pWorker);
                     TmpTCNode afterEq = init_tmp_tc_node(pNode->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
                     {
                         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("TCing value for enumerate"), pTCContext->pWorker);
@@ -162,7 +175,9 @@ local_func ETCResult typecheck_value_declaration_within_enum(TmpTCNode* pNode, u
                     pEnumBeingTCed->mapAllMembers.insert(iIdentifierId, uPos);
                     pEnumBeingTCed->vecAllMembers.append(pNewBinding);
                     pNewBinding->info = afterEq.pFinalValue->info;
+
                     pNewBinding->info.uIRandMetaFlags |= IRFLAG_TC_BINDING_INSTANCE;
+                    pEnumBeingTCed->pLastValue = pNewBinding;
                     return set_node_typecheck_notanexpr_success(pNode->pTCNode);
 
                 } else {
@@ -488,9 +503,9 @@ local_func ValueBinding* tc_find_binding_from_identifier(TCContext* pTCContext, 
         Assert_(has_ctx_decl_blocks(pTCContext));
         TCDeclSourceBlock* pCurrentBlock = (TCDeclSourceBlock*)pTCContext->pCurrentBlock;
         do {
-            TmpMap<int, u32>& mapLocalDeclsById = pCurrentBlock->mapBlockDeclarationsById;
-            auto itFoundLocal = mapLocalDeclsById.findHashed(uHash, iIdentifierHandle);
-            if (itFoundLocal != mapLocalDeclsById.end()) {
+            TmpMap<int, u32>* pMapLocalDeclsById = pCurrentBlock->pMapBlockDeclarationsById;
+            auto itFoundLocal = pMapLocalDeclsById->findHashed(uHash, iIdentifierHandle);
+            if (itFoundLocal != pMapLocalDeclsById->end()) {
                 u32 uIndex = itFoundLocal.value();
                 return (*get_tc_ctx_local_resolution_registry(pTCContext, eAttr))[uIndex];
             }
@@ -2145,24 +2160,50 @@ local_func ETCResult typecheck_any_non_invoc_expression(TmpTCNode* pExpr, u8 uNo
 
         case ENodeKind::ENODE_EXPR_EQ_CMP_BINARYOP: {
             u8 uOp = u8(pExpr->pTCNode->ast.uNodeKindAndFlags >> 8);
+            Assert_(uOp == ETOK_ARE_EQUAL || uOp == ETOK_ARE_NOT_EQUAL);
             BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking Node : Eq-Cmp Binary Op (token: %s )",
                 reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
-
-            // TODO
-            return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                "typecheck_any_non_invoc_expression() : eq-comparison binary op not yet implemented (outside cond)");
-            //return typecheck_eq_cmp_binary_op(pExpr, uOp, pTCStatement, pTCContext, eExpectation, inferredFromBelow);
+            TmpTCNode operandA = init_tmp_tc_node(pExpr->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
+            TmpTCNode operandB = init_tmp_tc_node(pExpr->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
+            {
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking LHS Expression of Eq-Cmp",
+                    reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                ETCResult eCheckA = typecheck_expression(&operandA, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                success_or_return_wait_or_error(eCheckA, pExpr->pTCNode);
+            }
+            {
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking RHS Expression of Eq-Cmp",
+                    reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                ETCResult eCheckB = typecheck_expression(&operandB, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                success_or_return_wait_or_error(eCheckB, pExpr->pTCNode);
+            }
+            return typecheck_eq_comparison_cond_or_expr(pExpr, uOp, 0u, &operandA, &operandB, pTCStatement,
+                0, false, EBranchKind::BRANCH_TAKEN_UNKNOWN, 0, false, EBranchKind::BRANCH_TAKEN_UNKNOWN,
+                pTCContext, eExpectation, 0u);
         }
 
         case ENodeKind::ENODE_EXPR_ORD_CMP_BINARYOP: {
             u8 uOp = u8(pExpr->pTCNode->ast.uNodeKindAndFlags >> 8);
+                Assert_(uOp == ETOK_LESSER_THAN || uOp == ETOK_LESSER_OR_EQ || uOp == ETOK_GREATER_THAN || uOp == ETOK_GREATER_OR_EQ);
             BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking Node : Ord-Cmp Binary Op (token: %s )",
                 reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
-
-            // TODO
-            return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                "typecheck_any_non_invoc_expression() : ord-comparison binary op not yet implemented (outside cond)");
-            //return typecheck_ord_cmp_binary_op(pExpr, uOp, pTCStatement, pTCContext, eExpectation, inferredFromBelow);
+            TmpTCNode operandA = init_tmp_tc_node(pExpr->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
+            TmpTCNode operandB = init_tmp_tc_node(pExpr->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
+            {
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking LHS Expression of Ord-Cmp",
+                    reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                ETCResult eCheckA = typecheck_expression(&operandA, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                success_or_return_wait_or_error(eCheckA, pExpr->pTCNode);
+            }
+            {
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking RHS Expression of Ord-Cmp",
+                    reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                ETCResult eCheckB = typecheck_expression(&operandB, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                success_or_return_wait_or_error(eCheckB, pExpr->pTCNode);
+            }
+            return typecheck_ord_comparison_cond_or_expr(pExpr, uOp, 0u, &operandA, &operandB, pTCStatement,
+                0, false, EBranchKind::BRANCH_TAKEN_UNKNOWN, 0, false, EBranchKind::BRANCH_TAKEN_UNKNOWN,
+                pTCContext, eExpectation, 0u);
         }
 
         case ENodeKind::ENODE_EXPR_PROCLIKE_DEF:
@@ -2953,7 +2994,7 @@ local_func ETCResult do_const_binding(TmpTCNode* pDecl, TmpTCNode* pValue, TCSta
         pBinding->uScopeAndLocation = (uRegistrationPos << 8) | EScopeKind::SCOPEKIND_PROC_BLOCK_LOCAL;
         pVecRegistry->append(pBinding);
         TCDeclSourceBlock* pDeclBlock = get_tc_ctx_local_declaration_block(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
-        pDeclBlock->mapBlockDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
+        pDeclBlock->pMapBlockDeclarationsById->insert(iIdentifierHandle, uRegistrationPos);
 
     } else { // filewise global const
         u32 uRegistrationPos = pTCContext->pIsolatedSourceFile->vecAllGlobalBindings.size();
@@ -3114,7 +3155,7 @@ local_func ETCResult do_var_binding(TmpTCNode* pDecl, TmpTCNode* pOptType, TmpTC
         pBinding->uScopeAndLocation = (uRegistrationPos << 8) | EScopeKind::SCOPEKIND_PROC_BLOCK_LOCAL;
         pVecRegistry->append(pBinding);
         TCDeclSourceBlock* pDeclBlock = get_tc_ctx_local_declaration_block(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_VAR);
-        pDeclBlock->mapBlockDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
+        pDeclBlock->pMapBlockDeclarationsById->insert(iIdentifierHandle, uRegistrationPos);
 
         Assert_(pTCContext->pProcResult);
         IRRepo* pLocalRepo = &(pTCContext->pProcResult->procwiseRepo);
@@ -3566,9 +3607,9 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
                     Assert_(has_ctx_decl_blocks(pTCContext));
                     TCDeclSourceBlock* pCurrentBlock = (TCDeclSourceBlock*)pTCContext->pCurrentBlock;
                     do {
-                        TmpMap<int, u32>& mapLocalDeclsById = pCurrentBlock->mapBlockDeclarationsById;
-                        auto itFoundLocal = mapLocalDeclsById.findHashed(uHash, iIdentifierHandle);
-                        if (itFoundLocal != mapLocalDeclsById.end()) {
+                        TmpMap<int, u32>* pMapLocalDeclsById = pCurrentBlock->pMapBlockDeclarationsById;
+                        auto itFoundLocal = pMapLocalDeclsById->findHashed(uHash, iIdentifierHandle);
+                        if (itFoundLocal != pMapLocalDeclsById->end()) {
                             emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
                                 "typecheck_declaration_statement() : already declared identifier (at local scope)");
                             return set_declaration_in_error(tAllDeclLhv, uDeclLhvNodeCount, pMainNode,
@@ -4059,13 +4100,290 @@ local_func ETCResult typecheck_assignment_statement(TmpTCNode* pMainNode, TCStat
 }
 
 // At statement level, typechecks pan-keywords
-local_func ETCResult typecheck_pan_statement(TmpTCNode* pMainNode, u8 uNodeKind, TCStatement* pTCStatement, TCContext* pTCContext)
+local_func ETCResult typecheck_pan_statement(TmpTCNode* pMainNode, TCStatement* pTCStatement, TCContext* pTCContext)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking Main Node of a pan-statement"), pTCContext->pWorker);
     
-    // TODO
-    return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-        "typecheck_pan_statement() : not yet implemented");
+    Assert_(u8(pMainNode->pTCNode->ast.uNodeKindAndFlags) == ENodeKind::ENODE_ST_PAN_SPECIAL);
+    u8 uTok = u8(pMainNode->pTCNode->ast.uNodeKindAndFlags >> 8);
+    switch (uTok) {
+        case ETOK_PAN_IF: {
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("Typechecking pan-if statement"), pTCContext->pWorker);
+            u32 uStatementIndex = pTCStatement->uStatementIndexInBlock;
+            Assert_(uStatementIndex == pTCContext->pCurrentBlock->uStatementBeingTypechecked);
+            if (uStatementIndex > 0) {
+                TCNode* pPrevMainNode = pTCContext->pCurrentBlock->vecStatements[uStatementIndex-1u]->vecNodes[0u];
+                u8 uPrevNodeKind = u8(pPrevMainNode->ast.uNodeKindAndFlags);
+                if (uPrevNodeKind == ENodeKind::ENODE_ST_PAN_SPECIAL) {
+                    u8 uPrevTok = u8(pPrevMainNode->ast.uNodeKindAndFlags >> 8);
+                    if (uPrevTok == ETOK_PAN_IF || uPrevTok == ETOK_PAN_ELIF || uPrevTok == ETOK_PAN_ELSE || uPrevTok == ETOK_PAN_SCOPE) {
+                        // TODO: should maybe be an assert instead: PostParser should have prevented this...
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                            "typecheck_pan_statement() : incorrect pan-if position in another pan-chain");
+                    }
+                }
+            }
+
+            TmpTCNode conditionNode = init_tmp_tc_node(pMainNode->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
+            {
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking Condition of pan-if statement"), pTCContext->pWorker);
+                ETCResult eCheckCond = typecheck_expression(&conditionNode, pTCStatement, pTCContext, EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{});
+                success_or_return_wait_or_error(eCheckCond, pMainNode->pTCNode);
+                Assert_(is_node_already_typechecked(conditionNode.pTCNode));
+                Assert_(conditionNode.pIntrinsicValue);
+                Assert_(conditionNode.pIntrinsicValue->pType);
+                if (conditionNode.pIntrinsicValue->pType != g_pCoreTypesInfo[ECORETYPE_BOOL]) {
+                    return_error(pMainNode, pTCStatement, pTCContext, CERR_EXPECTED_BOOLEAN,
+                        "typecheck_pan_statement() : pan-if condition expression should typecheck to a boolean");
+                }
+            }
+            Assert_(is_value_tc_const(conditionNode.pIntrinsicValue));
+            Assert_(is_value_known_non_nyka_embd(conditionNode.pIntrinsicValue));
+            u64 uBoolValue = conditionNode.pIntrinsicValue->info.metaValue.knownValue.uEmbeddedValue;
+            Assert_(uBoolValue <= 1uLL);
+            if (uBoolValue) {
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-if condition evaluated to true"), pTCContext->pWorker);
+                if (pTCStatement->pChildBlock) { // in case there is a child block missing error, we'd still have allowed to tc the condition
+                    u64 uTagged = reinterpret_cast<u64>(pTCStatement->pChildBlock);
+                    if (uTagged & 0x01uLL) {    // tagged-ptr with 1 as lsb is indication that the child block has not yet been spawned
+                        // And we spawn it now...
+                        pTCStatement->pChildBlock = init_new_child_block_of_pan_from_tagged(uTagged, pTCContext);
+                    }
+                    if (is_ctx_compound(pTCContext)) {
+                        Assert_(pTCContext->pCompoundToTC);
+                        if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("=> pan-if set-up to spawn a virtual structlike as its child"), pTCContext->pWorker);
+                            // TODO
+                            return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                                "typecheck_pan_statement() : spawning virtual within struct-like not yet implemented");
+                        } // Otherwise fallthrough
+                    }
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-if set-up to continue typechecking through true-path child"), pTCContext->pWorker);
+                    pTCContext->pCurrentBlock->pNextTcBlockAfterCurrentStatement = pTCStatement->pChildBlock;
+                    return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+
+                } else {
+                    if (pTCStatement->pAstStatement->uFlags & STATEMENT_IS_PAN_DIRECTIVE_VALIDLY_WITHOUT_CHILD) {
+                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-if (true path) validly without child block"), pTCContext->pWorker);
+                        return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+                    } else {
+                        return_error(pMainNode, pTCStatement, pTCContext, CERR_CONTROL_FLOW_STATEMENT_MISSING_CHILD_BLOCK,
+                            "typechecker error for #if statement missing child block");
+                    }
+                }
+
+            } else {
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-if condition evaluated to false"), pTCContext->pWorker);
+                // in case of false, we simply do *not* register our child block for typechecking... and carry-on
+                pMainNode->pTCNode->ast.uNodeKindAndFlags |= ENODEKINDFLAG_WAS_TC_PANIF_NOT_TAKEN; // we'll flag ourselves as *not taken* for possible elif or else, though
+                return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+            }
+
+        } break;
+
+        case ETOK_PAN_ELIF: {
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("Typechecking pan-elif statement"), pTCContext->pWorker);
+            u32 uStatementIndex = pTCStatement->uStatementIndexInBlock;
+            Assert_(uStatementIndex == pTCContext->pCurrentBlock->uStatementBeingTypechecked);
+            if (uStatementIndex > 0) {
+                TCNode* pPrevMainNode = pTCContext->pCurrentBlock->vecStatements[uStatementIndex-1u]->vecNodes[0u];
+                u8 uPrevNodeKind = u8(pPrevMainNode->ast.uNodeKindAndFlags);
+                if (uPrevNodeKind == ENodeKind::ENODE_ST_PAN_SPECIAL) {
+                    u8 uPrevTok = u8(pPrevMainNode->ast.uNodeKindAndFlags >> 8);
+                    if (uPrevTok != ETOK_PAN_IF && uPrevTok != ETOK_PAN_ELIF) {
+                        // TODO: should maybe be an assert instead: PostParser should have prevented this...
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                            "typecheck_pan_statement() : incorrect pan-elif position (expected #if or #elif before)");
+                    }
+                    if (is_node_already_typechecked(pPrevMainNode)) {
+                        u32 bPreviousWasNotTaken = pPrevMainNode->ast.uNodeKindAndFlags & ENODEKINDFLAG_WAS_TC_PANIF_NOT_TAKEN;
+                        if (bPreviousWasNotTaken) {
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-elif : previous chain is still looking for its path"), pTCContext->pWorker);
+                            TmpTCNode conditionNode = init_tmp_tc_node(pMainNode->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
+                            {
+                                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking Condition of pan-elif statement"), pTCContext->pWorker);
+                                ETCResult eCheckCond = typecheck_expression(&conditionNode, pTCStatement, pTCContext, EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{});
+                                success_or_return_wait_or_error(eCheckCond, pMainNode->pTCNode);
+                                Assert_(is_node_already_typechecked(conditionNode.pTCNode));
+                                Assert_(conditionNode.pIntrinsicValue);
+                                Assert_(conditionNode.pIntrinsicValue->pType);
+                                if (conditionNode.pIntrinsicValue->pType != g_pCoreTypesInfo[ECORETYPE_BOOL]) {
+                                    return_error(pMainNode, pTCStatement, pTCContext, CERR_EXPECTED_BOOLEAN,
+                                        "typecheck_pan_statement() : pan-elif condition expression should typecheck to a boolean");
+                                }
+                            }
+                            Assert_(is_value_tc_const(conditionNode.pIntrinsicValue));
+                            Assert_(is_value_known_non_nyka_embd(conditionNode.pIntrinsicValue));
+                            u64 uBoolValue = conditionNode.pIntrinsicValue->info.metaValue.knownValue.uEmbeddedValue;
+                            Assert_(uBoolValue <= 1uLL);
+                            if (uBoolValue) {
+                                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-elif condition evaluated to true"), pTCContext->pWorker);
+                                if (pTCStatement->pChildBlock) { // in case there is a child block missing error, we'd still have allowed to tc the condition
+                                    u64 uTagged = reinterpret_cast<u64>(pTCStatement->pChildBlock);
+                                    if (uTagged & 0x01uLL) {    // tagged-ptr with 1 as lsb is indication that the child block has not yet been spawned
+                                        // And we spawn it now...
+                                        pTCStatement->pChildBlock = init_new_child_block_of_pan_from_tagged(uTagged, pTCContext);
+                                    }
+                                    if (is_ctx_compound(pTCContext)) {
+                                        Assert_(pTCContext->pCompoundToTC);
+                                        if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("=> pan-elif set-up to spawn a virtual structlike as its child"), pTCContext->pWorker);
+                                            // TODO
+                                            return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                                                "typecheck_pan_statement() : spawning virtual within struct-like not yet implemented");
+                                        } // Otherwise fallthrough
+                                    }
+                                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-elif set-up to continue typechecking through true-path child"), pTCContext->pWorker);
+                                    pTCContext->pCurrentBlock->pNextTcBlockAfterCurrentStatement = pTCStatement->pChildBlock;
+                                    return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+
+                                } else {
+                                    if (pTCStatement->pAstStatement->uFlags & STATEMENT_IS_PAN_DIRECTIVE_VALIDLY_WITHOUT_CHILD) {
+                                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-elif (true path) validly without child block"), pTCContext->pWorker);
+                                        return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+                                    } else {
+                                        return_error(pMainNode, pTCStatement, pTCContext, CERR_CONTROL_FLOW_STATEMENT_MISSING_CHILD_BLOCK,
+                                            "typechecker error for #elif statement missing child block");
+                                    }
+                                }
+
+                            } else {
+                                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-elif condition evaluated to false"), pTCContext->pWorker);
+                                // in case of false, we simply do *not* register our child block for typechecking... and carry-on
+                                pMainNode->pTCNode->ast.uNodeKindAndFlags |= ENODEKINDFLAG_WAS_TC_PANIF_NOT_TAKEN; // we'll flag ourselves as *not taken* for possible elif or else, though
+                                return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+                            }
+
+                        } else {
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-elif : previous chain is done looking for its path => skipping as success"), pTCContext->pWorker);
+                            // in case of previous not-flaggued as not-taken, we *won't* flag ourselves as not-taken either => no other successor in the chain will get to typecheck its contents
+                            return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+                        }
+                    } else {
+                        Assert_(!should_tc_ctx_halt_on_non_success(pTCContext));
+                        if (is_node_tc_in_error(pPrevMainNode)) {
+                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                                "typecheck_pan_statement() : cannot typecheck #elif after a #if-chain in error.");
+                        } else { // previous node not typechecked, nor in error... it can either be waiting, or be silently skipped from a previous wait
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-elif : previous chain is waiting => skipping silently, atm (should be tc'd again)"), pTCContext->pWorker);
+                            // => in that case, we'll hack a little arrangement to make this one be silently skipped also:
+                            // it will be typechecked afterwards by the supposed task-in-waiting at some point in the chain, once it resumes.
+                            return ETCResult(0u - 1u); // TC coordinator will assign 1+our result to the TC status => shall be kept 0 that way :p
+                        }
+                    }
+                } else {
+                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                        "typecheck_pan_statement() : incorrect pan-elif position (not a pan-op before)");
+                }
+            } else {
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                    "typecheck_pan_statement() : incorrect pan-elif position (first in its block)");
+            }
+        } break;
+
+        case ETOK_PAN_ELSE: {
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("Typechecking pan-else statement"), pTCContext->pWorker);
+            u32 uStatementIndex = pTCStatement->uStatementIndexInBlock;
+            Assert_(uStatementIndex == pTCContext->pCurrentBlock->uStatementBeingTypechecked);
+            if (uStatementIndex > 0) {
+                TCNode* pPrevMainNode = pTCContext->pCurrentBlock->vecStatements[uStatementIndex-1u]->vecNodes[0u];
+                u8 uPrevNodeKind = u8(pPrevMainNode->ast.uNodeKindAndFlags);
+                if (uPrevNodeKind == ENodeKind::ENODE_ST_PAN_SPECIAL) {
+                    u8 uPrevTok = u8(pPrevMainNode->ast.uNodeKindAndFlags >> 8);
+                    if (uPrevTok != ETOK_PAN_IF && uPrevTok != ETOK_PAN_ELIF) {
+                        // TODO: should maybe be an assert instead: PostParser should have prevented this...
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                            "typecheck_pan_statement() : incorrect pan-elif position (expected #if or #elif before)");
+                    }
+                    if (is_node_already_typechecked(pPrevMainNode)) {
+                        u32 bPreviousWasNotTaken = pPrevMainNode->ast.uNodeKindAndFlags & ENODEKINDFLAG_WAS_TC_PANIF_NOT_TAKEN;
+                        if (bPreviousWasNotTaken) {
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-else : previous chain is still looking for its path"), pTCContext->pWorker);
+                            if (pTCStatement->pChildBlock) { // in case there is a child block missing error, we'd still have allowed to tc the condition
+                                u64 uTagged = reinterpret_cast<u64>(pTCStatement->pChildBlock);
+                                if (uTagged & 0x01uLL) {    // tagged-ptr with 1 as lsb is indication that the child block has not yet been spawned
+                                    // And we spawn it now...
+                                    pTCStatement->pChildBlock = init_new_child_block_of_pan_from_tagged(uTagged, pTCContext);
+                                }
+                                if (is_ctx_compound(pTCContext)) {
+                                    Assert_(pTCContext->pCompoundToTC);
+                                    if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("=> pan-else set-up to spawn a virtual structlike as its child"), pTCContext->pWorker);
+                                        // TODO
+                                        return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                                            "typecheck_pan_statement() : spawning virtual within struct-like not yet implemented");
+                                    } // Otherwise fallthrough
+                                }
+                                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("=> pan-else set-up to continue typechecking through its child"), pTCContext->pWorker);
+                                pTCContext->pCurrentBlock->pNextTcBlockAfterCurrentStatement = pTCStatement->pChildBlock;
+                                return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+
+                            } else {
+                                if (pTCStatement->pAstStatement->uFlags & STATEMENT_IS_PAN_DIRECTIVE_VALIDLY_WITHOUT_CHILD) {
+                                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-else validly without child block"), pTCContext->pWorker);
+                                    return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+                                } else {
+                                    return_error(pMainNode, pTCStatement, pTCContext, CERR_CONTROL_FLOW_STATEMENT_MISSING_CHILD_BLOCK,
+                                        "typechecker error for #else statement missing child block");
+                                }
+                            }
+
+                        } else {
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-else : previous chain is done looking for its path => skipping as success"), pTCContext->pWorker);
+                            // in case of previous not-flaggued as not-taken, we *won't* flag ourselves as not-taken either => no other successor in the chain will get to typecheck its contents
+                            return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+                        }
+                    } else {
+                        Assert_(!should_tc_ctx_halt_on_non_success(pTCContext));
+                        if (is_node_tc_in_error(pPrevMainNode)) {
+                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                                "typecheck_pan_statement() : cannot typecheck #elif after a #if-chain in error.");
+                        } else { // previous node not typechecked, nor in error... it can either be waiting, or be silently skipped from a previous wait
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("pan-else : previous chain is waiting => skipping silently, atm (should be tc'd again)"), pTCContext->pWorker);
+                            // => in that case, we'll hack a little arrangement to make this one be silently skipped also:
+                            // it will be typechecked afterwards by the supposed task-in-waiting at some point in the chain, once it resumes.
+                            return ETCResult(0u - 1u); // TC coordinator will assign 1+our result to the TC status => shall be kept 0 that way :p
+                        }
+                    }
+                } else {
+                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                        "typecheck_pan_statement() : incorrect pan-else position (not a pan-op before)");
+                }
+            } else {
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                    "typecheck_pan_statement() : incorrect pan-else position (first in its block)");
+            }
+        } break;
+
+        case ETOK_PAN_ENDIF: {
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED("Typechecking pan-endif statement => NOOP, success"), pTCContext->pWorker);
+            return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+        } break;
+
+        case ETOK_PAN_SCOPE: {
+            if (is_ctx_global(pTCContext)) {
+                // TODO
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                    "typecheck_pan_statement() : pan-scope not yet implemented");
+            } else {
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                    "typecheck_pan_statement() : pan-scope is only allowed at global scope");
+            }
+        } break;
+        case ETOK_PAN_ENDSCOPE: {
+            if (is_ctx_global(pTCContext)) {
+                // TODO
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                    "typecheck_pan_statement() : pan-endscope not yet implemented");
+            } else {
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                    "typecheck_pan_statement() : pan-endscope is only allowed at global scope");
+            }
+        } break;
+        default:
+            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                "typecheck_pan_statement() : unexpected pan-token in pan-special category");
+    }
 }
 
 // At statement level, typechecks other kinds of nodes...

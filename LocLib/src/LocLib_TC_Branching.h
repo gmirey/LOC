@@ -1361,6 +1361,8 @@ restart_if_macro:
             case ENodeKind::ENODE_EXPR_BOOL_NOT: {
                 // special treatment for 'not', so that we can keep our condition-related vecs of jumps at hand
                 Assert_(u8(pNode->pTCNode->ast.uNodeKindAndFlags >> 8) == ETOK_BOOL_NOT);
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                    "Typechecking Node as runtime conditional : 'Not' unary"),pTCContext->pWorker);
                 TmpTCNode exprToInvert = init_tmp_tc_node(pNode->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
                 ETCResult checkToInvert = typecheck_runtime_conditional(&exprToInvert, pTCStatement,
                     pVecJumpSourcesWhenTrue, bWhenTrueCanFallthrough, eKindOfTruePath,
@@ -1380,11 +1382,15 @@ restart_if_macro:
                 TmpTCNode operandB = init_tmp_tc_node(pNode->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
                 bool isNotInverted = (uIsNegatedFromAbove == 0u);
                 if (isOpAnd == isNotInverted) {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                        "Typechecking Node as runtime conditional : 'Either 'and', or inverted 'or' => Conjunction ith shortcut"),pTCContext->pWorker);
                     return typecheck_runtime_conditional_conjunction_with_shortcut(pNode, uOp, &operandA, &operandB, pTCStatement,
                             pVecJumpSourcesWhenTrue, bWhenTrueCanFallthrough, eKindOfTruePath,
                             pVecJumpSourcesWhenFalse, bWhenFalseCanFallthrough, eKindOfFalsePath,
                             pTCContext, eExpectation, uIsNegatedFromAbove);
                 } else {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                        "Typechecking Node as runtime conditional : 'Either 'or', or inverted 'and' => Disjunction ith shortcut"),pTCContext->pWorker);
                     return typecheck_runtime_conditional_disjunction_with_shortcut(pNode, uOp, &operandA, &operandB, pTCStatement,
                             pVecJumpSourcesWhenTrue, bWhenTrueCanFallthrough, eKindOfTruePath,
                             pVecJumpSourcesWhenFalse, bWhenFalseCanFallthrough, eKindOfFalsePath,
@@ -1397,6 +1403,8 @@ restart_if_macro:
                 TmpTCNode exprWithin = init_tmp_tc_node(pNode->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
                 if (is_comptime_prefixed(&(pNode->pTCNode->ast))) {
                     // comptime-prefix => evaluate as constant expression, and goto on has typechecked expression
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                        "Typechecking Node as runtime conditional : within comptime-prefixed parens, will typecheck a expression"), pTCContext->pWorker);
                     ETCResult checkWithin = typecheck_expression(&exprWithin, pTCStatement, pTCContext,
                         EExpectedExpr::EXPECT_CONSTANT, infer_type(g_pCoreTypesInfo[ECORETYPE_BOOL]));
                     if (checkWithin == ETCResult::ETCR_SUCCESS) {
@@ -1405,6 +1413,8 @@ restart_if_macro:
                     } otherwise_return_wait_or_error(checkWithin, pNode->pTCNode);
                 } else {
                     // otherwise, pass the conditional treatment to expr within directly
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                        "Typechecking Node as runtime conditional : Within parens"), pTCContext->pWorker);
                     ETCResult checkWithin = typecheck_runtime_conditional(&exprWithin, pTCStatement,
                         pVecJumpSourcesWhenTrue, bWhenTrueCanFallthrough, eKindOfTruePath,
                         pVecJumpSourcesWhenFalse, bWhenFalseCanFallthrough, eKindOfFalsePath,
@@ -1419,13 +1429,23 @@ restart_if_macro:
             case ENodeKind::ENODE_EXPR_EQ_CMP_BINARYOP: {
                 // special treatment for eq/neq, so that we can keep our condition-related vecs of jumps at hand
                 u8 uOp = u8(pNode->pTCNode->ast.uNodeKindAndFlags >> 8);
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking Node as runtime conditional : Eq-Cmp Binary Op (token: %s )",
+                    reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
                 Assert_(uOp == ETOK_ARE_EQUAL || uOp == ETOK_ARE_NOT_EQUAL);
                 TmpTCNode operandA = init_tmp_tc_node(pNode->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
                 TmpTCNode operandB = init_tmp_tc_node(pNode->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
-                ETCResult eCheckA = typecheck_expression(&operandA, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
-                success_or_return_wait_or_error(eCheckA, pNode->pTCNode);
-                ETCResult eCheckB = typecheck_expression(&operandB, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
-                success_or_return_wait_or_error(eCheckB, pNode->pTCNode);
+                {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking LHS Expression of Eq-Cmp",
+                        reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                    ETCResult eCheckA = typecheck_expression(&operandA, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                    success_or_return_wait_or_error(eCheckA, pNode->pTCNode);
+                }
+                {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking RHS Expression of Eq-Cmp",
+                        reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                    ETCResult eCheckB = typecheck_expression(&operandB, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                    success_or_return_wait_or_error(eCheckB, pNode->pTCNode);
+                }
                 return typecheck_eq_comparison_cond_or_expr(pNode, uOp, 1u, &operandA, &operandB, pTCStatement,
                     pVecJumpSourcesWhenTrue, bWhenTrueCanFallthrough, eKindOfTruePath,
                     pVecJumpSourcesWhenFalse, bWhenFalseCanFallthrough, eKindOfFalsePath,
@@ -1436,12 +1456,22 @@ restart_if_macro:
                 // special treatment for ordered comparisons, so that we can keep our condition-related vecs of jumps at hand
                 u8 uOp = u8(pNode->pTCNode->ast.uNodeKindAndFlags >> 8);
                 Assert_(uOp == ETOK_LESSER_THAN || uOp == ETOK_LESSER_OR_EQ || uOp == ETOK_GREATER_THAN || uOp == ETOK_GREATER_OR_EQ);
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking Node as runtime conditional : Ord-Cmp Binary Op (token: %s )",
+                    reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
                 TmpTCNode operandA = init_tmp_tc_node(pNode->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
                 TmpTCNode operandB = init_tmp_tc_node(pNode->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
-                ETCResult eCheckA = typecheck_expression(&operandA, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
-                success_or_return_wait_or_error(eCheckA, pNode->pTCNode);
-                ETCResult eCheckB = typecheck_expression(&operandB, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
-                success_or_return_wait_or_error(eCheckB, pNode->pTCNode);
+                {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking LHS Expression of Ord-Cmp",
+                        reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                    ETCResult eCheckA = typecheck_expression(&operandA, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                    success_or_return_wait_or_error(eCheckA, pNode->pTCNode);
+                }
+                {
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking RHS Expression of Ord-Cmp",
+                        reinterpret_cast<u64>(tStandardPayloadsStr[uOp])), pTCContext->pWorker);
+                    ETCResult eCheckB = typecheck_expression(&operandB, pTCStatement, pTCContext, eExpectation, UpwardsInference{});
+                    success_or_return_wait_or_error(eCheckB, pNode->pTCNode);
+                }
                 return typecheck_ord_comparison_cond_or_expr(pNode, uOp, 1u, &operandA, &operandB, pTCStatement,
                     pVecJumpSourcesWhenTrue, bWhenTrueCanFallthrough, eKindOfTruePath,
                     pVecJumpSourcesWhenFalse, bWhenFalseCanFallthrough, eKindOfFalsePath,
@@ -1450,6 +1480,8 @@ restart_if_macro:
 
             // otherwise we typecheck as expression
             default: { check_other_exprs:
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                    "Typechecking Node as runtime conditional : Fallback evaluation as standard expression"), pTCContext->pWorker);
                 ETCResult checkExpr = typecheck_any_non_invoc_expression(pNode, uBroadKind, pTCStatement,
                     pTCContext, eExpectation, infer_type(g_pCoreTypesInfo[ECORETYPE_BOOL]));
                 if (checkExpr == ETCResult::ETCR_SUCCESS) {
@@ -1556,7 +1588,8 @@ local_func ETCResult typecheck_return_statement(TmpTCNode* pMainNode, TCStatemen
     do {
         if (pCurrentOrAncestorAsSeq->pParentBlock) { // if we're not last
             // TODO: emission of markers for scope anyway ???
-            if (pCurrentAsSeq->vecDeferredBlocksInDeclOrder.size()) {
+            // Maybe not...
+            if (pCurrentAsSeq->pVecDeferredBlocksInDeclOrder->size()) { // TODO: CLEANUP: what if non-scoped block there
                 // TODO
                 return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
                     "typecheck_return_statement() : return jumping above non-root-scope-deferred blocks not yet implemented");
@@ -1567,13 +1600,18 @@ local_func ETCResult typecheck_return_statement(TmpTCNode* pMainNode, TCStatemen
 
     // if we're not jumping through several defers (impl scheme TODO) but we still have defers here,
     //   then we're in the case where defer chain is already positionned to a final 'ret', so we simply need to branch to last defer
-    u32 uDeferCount = pCurrentAsSeq->vecDeferredBlocksInDeclOrder.size();
+    u32 uDeferCount = pCurrentAsSeq->pVecDeferredBlocksInDeclOrder->size();
     if (uDeferCount) {
+        /*
         u32 uLastDefer = uDeferCount - 1u;
         // forcing-as-if there was an explicit goto-last-defer-with-default-exit statement at the end of this block
-        u32 uGotoIR = ir_emit_goto(pCurrentAsSeq->vecDeferredBlocksInDeclOrder[uLastDefer]->_uBlockOpeningIRIffSeq,
+        u32 uGotoIR = ir_emit_goto((*pCurrentAsSeq->pVecDeferredBlocksInDeclOrder)[uLastDefer]->_uBlockOpeningIRIffSeq,
             pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
         pTCStatement->uLastIRorGlobalTCResult = uGotoIR;
+        */
+        // TODO: CLEANUP: not so sure about the above impl
+        return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+            "typecheck_return_statement() : return in presence of defers not yet implemented");
     } else {
         u32 uRetPos = ir_emit_return(pTCContext->pRepo, pTCContext);
         pTCStatement->uLastIRorGlobalTCResult = uRetPos;
@@ -1607,7 +1645,7 @@ local_func ETCResult typecheck_runtime_ternary_if_expression(TmpTCNode* pExpr, T
 }
 
 // At statement level, typechecks control-flow statements
-local_func ETCResult typecheck_control_flow_statement(TmpTCNode* pMainNode, u8 uNodeKind,
+local_func ETCResult typecheck_control_flow_statement(TmpTCNode* pMainNode,
     TCStatement* pTCStatement, TCContext* pTCContext)
 {
     Assert_(u8(pMainNode->pTCNode->ast.uNodeKindAndFlags) == ENodeKind::ENODE_ST_CONTROL_FLOW);

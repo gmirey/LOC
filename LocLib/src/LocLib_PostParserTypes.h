@@ -101,6 +101,7 @@ enum ENodeKindFlag {
     ENODEKINDFLAG_IS_TYPECHECKED_PHASE1      = 0x01000000,
     ENODEKINDFLAG_IS_TYPECHECKED_PHASE2      = 0x02000000,
     ENODEKINDFLAG_HAS_NO_TC_EXPR_VALUE       = 0x04000000,
+    ENODEKINDFLAG_WAS_TC_PANIF_NOT_TAKEN     = 0x08000000,
 
     // positionned by the typechecker, but not part of the 'tc' flags proper
     // Note: Not used any more with current scheme...

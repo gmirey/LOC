@@ -380,6 +380,9 @@ local_func bool make_ast_for_source_file(int iSourceFileIndex,
         u8 uAllIndentsAtStartOfMultiline = parserParams.parserState.uCurrentLineIndent;
         const u8* pActualByteAtStartOfMultiline = parserParams.parserState.pStartOfLineAfterIndent - uAllIndentsAtStartOfMultiline;
 
+        bool bBlockJustClosedByIndent = false;
+
+        // Nominal-case : same indentation as previously
         if (uTabIndentAtStartOfMultiline == parserParams.parserState.uCurrentBlockTabIndents) {
             if (eBlockSpawningState != EBLOCK_SPAWNING_EXPECTED) {
                 // nominal case NOOP
@@ -412,7 +415,7 @@ local_func bool make_ast_for_source_file(int iSourceFileIndex,
                 uError = PERR_INVALID_MULTILINE_INDENTATION_NORECOVERY;
             }
 
-            if (eBlockSpawningState != EBLOCK_SPAWNING_NONE) {
+            if (eBlockSpawningState != EBLOCK_SPAWNING_NONE) { //... good news: we expected that child block to be opened indeed
                 // nominal case NOOP
             } else {
                 if (uError == 0u) { // if no tokenizer error...
@@ -455,6 +458,7 @@ local_func bool make_ast_for_source_file(int iSourceFileIndex,
                 // each iteration of the loop before should have set block spawning state to none, and current block does not change it
                 Assert_(eBlockSpawningState == EBLOCK_SPAWNING_NONE);
             }
+            bBlockJustClosedByIndent = true;
         }
 
         //
@@ -487,22 +491,33 @@ local_func bool make_ast_for_source_file(int iSourceFileIndex,
         // Handling block-starting and block-ending concerns related to pan directives, for which identation increase is optional
         //
 
-        // if previous line was a pan-directive starting block, handle block-opening in those case where
-        //      child was opened at same-indentation
+        // if previous line was a pan-directive starting block, handle block-opening in those case where child was opened at same-indentation
         // if line is a pan-directive ending block, handle block closing in those case where:
         //      - child was opened at same-indentation, or
         //      - there was no statement as child block
+        // 
+        // Note: 'eBlockSpawningState' at this point is *still* dependent from the *previous* parsed statement, not the one we just did.
+        // Moreover: If was EBLOCK_SPAWNING_NONE : nothing happened between previously parsed statement, and current preparsed.
+        //           If was EBLOCK_SPAWNING_EXPECTED (OR EBLOCK_SPAWNING_PAN_DIRECTIVE) and we detected an indentation increase:
+        //              the block was already spawned, and we reset eBlockSpawningState to EBLOCK_SPAWNING_NONE already
+        // => only distinct possibility here is 'EBLOCK_SPAWNING_PAN_DIRECTIVE' where there was *no* subsequent indentation increase !
         if (eBlockSpawningState != EBLOCK_SPAWNING_PAN_DIRECTIVE) {
-            Assert_(eBlockSpawningState == EBLOCK_SPAWNING_NONE);
             // most common case: previous statement (at same indentation) is not a block-spawning pan-directive
+            Assert_(eBlockSpawningState == EBLOCK_SPAWNING_NONE);
+            // And if the statement just-parsed is *not* pan-closing either...
             if (0 == (pPreStatement->uStatementFlags & ESTATEMENTFLAGS_BLOCK_ENDING_PAN_DIRECTIVE)) {
-                // nominal case NOOP
-            } else { // current statement is block-ending, and previous one was not block-opening,
+                // then we're in nominal case: nothing to do in here relative to pan statements :)
+                // NOOP
+            } else { // the just-parsed statement is pan-closing (and previous one was not block-opening)
                 // most common case when encountering a block-ending pan directive, is we actually had some statements inbetween
                 // furthermore, if we got to that case, means we did not close that in-between block by indent-only
                 if (pCurrentBlock->uPreParsingFlags & BLOCK_WAS_SPAWNED_AT_SAME_INDENT_AS_PARENT) {
                     // nominal case, indeed => close that block.
-                    pCurrentBlock = _convert_and_close_block(tBlocks, &vecFinalBlocks, pCurrentBlock, parserParams, EBLOCK_SPAWNING_NONE, arenaForFinalAST);
+                    pCurrentBlock = _convert_and_close_block(tBlocks, &vecFinalBlocks, pCurrentBlock, parserParams,
+                        EBLOCK_SPAWNING_NONE, arenaForFinalAST, true);
+                } else if (bBlockJustClosedByIndent) {
+                    // also okay: we had a child block, and we closed it the regular way...
+                    // NOOP there
                 } else { // some indent-or-pan-directive-matching error here...
                     debug_print_preparse_err("*** Found block-ending pan-directive at an invalid or multi-line-indentation level relative to current block");
                     // => trying to match it with a pan directive in parent block, for recovery... ?
@@ -513,8 +528,9 @@ local_func bool make_ast_for_source_file(int iSourceFileIndex,
             }
 
         } else {
-            // previous statement at same indentation *is* a block-spawning pan-directive
-            if (0 == (pPreStatement->uStatementFlags & ESTATEMENTFLAGS_BLOCK_ENDING_PAN_DIRECTIVE)) { 
+            // previous statement at same indentation was a pan-opener
+            // moreover, just-parsed statement *is* not a block-ending
+            if (0 == (pPreStatement->uStatementFlags & ESTATEMENTFLAGS_BLOCK_ENDING_PAN_DIRECTIVE)) {
                 // block spawning before, not block ending current, and not having spawned child block yet
                 // => do so now, flagging it as opened at same indent.
                 pCurrentBlock = _open_child_block(tBlocks, &vecFinalBlocks, pCurrentBlock, parserParams, blockParsingArena);
@@ -766,64 +782,78 @@ local_func void do_handle_seq_block_exit(TCContext* pTCContext)
         u64(pTCContext->pCurrentBlock->uAstBlockIndex), u64(pTCContext->pCurrentBlock->pParentBlock->uAstBlockIndex)), pTCContext->pWorker);
 
     TCSeqSourceBlock* pCurrentAsSeq = (TCSeqSourceBlock*)pTCContext->pCurrentBlock;
-    u32 uDeferCount = pCurrentAsSeq->vecDeferredBlocksInDeclOrder.size();
-    if (uDeferCount) {      // path in the presence of 'defers'
+    TCSeqSourceBlock* pParentAsSeq = (TCSeqSourceBlock*)pTCContext->pCurrentBlock->pParentBlock;
 
-        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-            "Defer already positionned on block fallthrough"), pTCContext->pWorker);
+    if (pCurrentAsSeq->pMapBlockDeclarationsById != pParentAsSeq->pMapBlockDeclarationsById) { // nominal case
+        Assert_(pCurrentAsSeq->pVecDeferredBlocksInDeclOrder != pParentAsSeq->pVecDeferredBlocksInDeclOrder);
+        Assert_(pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses != pParentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
 
-        // This defer case is very simply handled, since we always emit deferred blocks, as soon as encountered,
-        //   towards "standard" block exit (or LOOP) => All we'd need to to here is to branch to start-IR for that last deferred block.
-        u32 uLastDefer = uDeferCount - 1u;
-        // scope ending (similar to the "default path" as appears below) will be already handled at the end of
-        //   first-declared (and last-unstacked) deferred block, eventually reached by the defer chain to which we goto now:
-        ir_emit_goto(pCurrentAsSeq->vecDeferredBlocksInDeclOrder[uLastDefer]->_uBlockOpeningIRIffSeq,
-            pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
+        u32 uDeferCount = pCurrentAsSeq->pVecDeferredBlocksInDeclOrder->size();
+        if (uDeferCount) { // path in the presence of defers
 
-    } else {                // default-path
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                "Defer already positionned on block fallthrough"), pTCContext->pWorker);
+
+            // This defer case is very simply handled, since we always emit deferred blocks, as soon as encountered,
+            //   towards "standard" block exit (or LOOP) => All we'd need to to here is to branch to start-IR for that last deferred block.
+            u32 uLastDefer = uDeferCount - 1u;
+            // scope ending (similar to the "default path" as appears below) will be already handled at the end of
+            //   first-declared (and last-unstacked) deferred block, eventually reached by the defer chain to which we goto now:
+            ir_emit_goto((*pCurrentAsSeq->pVecDeferredBlocksInDeclOrder)[uLastDefer]->_uBlockOpeningIRIffSeq,
+                pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
+
+        } else {                // default-path
             
-        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-            "Block fallthrough, without defer"), pTCContext->pWorker);
-
-        // scope ending... note that 'block opening +1' shall be IR of scope start
-        ir_emit_marker_end_scope(pCurrentAsSeq->_uBlockOpeningIRIffSeq + 1u, pTCContext->pRepo, pTCContext);
-
-        // then branch to wherever is needed at the end of that block:
-        if (pCurrentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop != INVALID_IR_CODE) {
-
             BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-                "Block is marked as a loop => emitting GOTO its start point"), pTCContext->pWorker);
+                "Block fallthrough, without defer"), pTCContext->pWorker);
 
-            // If we have a special start-of-loop target, then directly jump to it.
-            ir_emit_goto(pCurrentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop,   // 'toloopcond_before' is default for all just-TC loops.
-                pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TOLOOPCOND_BEFORE); // optimizer may prefer otherwise
-            // and that should be the 'only' registered special-way to end that block:
-            Assert_(pCurrentAsSeq->pVecPlaceholdersToElse == 0);
+            // scope ending... note that 'block opening +1' shall be IR of scope start
+            ir_emit_marker_end_scope(pCurrentAsSeq->_uBlockOpeningIRIffSeq + 1u, pTCContext->pRepo, pTCContext);
 
-        } else { Assert_(pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
+            // then branch to wherever is needed at the end of that block:
+            if (pCurrentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop != INVALID_IR_CODE) {
 
-            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-                "Block is standard => emitting GOTO placeholders, registered to its 'after-block' vector"), pTCContext->pWorker);
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                    "Block is marked as a loop => emitting GOTO its start point"), pTCContext->pWorker);
 
-            u32 uGotoIR = ir_emit_goto_placeholder(pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_BLOCK_END);
-            pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses->append(uGotoIR);
+                // If we have a special start-of-loop target, then directly jump to it.
+                ir_emit_goto(pCurrentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop,   // 'toloopcond_before' is default for all just-TC loops.
+                    pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TOLOOPCOND_BEFORE); // optimizer may prefer otherwise
+                // and that should be the 'only' registered special-way to end that block:
+                Assert_(pCurrentAsSeq->pVecPlaceholdersToElse == 0);
+
+            } else { Assert_(pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
+
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                    "Block is standard => emitting GOTO placeholders, registered to its 'after-block' vector"), pTCContext->pWorker);
+
+                u32 uGotoIR = ir_emit_goto_placeholder(pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_BLOCK_END);
+                pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses->append(uGotoIR);
+            }
+
         }
 
-    }
+        {
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                "Emitting the after-block marker"), pTCContext->pWorker);
+            pCurrentAsSeq->uIROfAfterBlock = ir_emit_marker_jump_target(pTCContext->pRepo, pTCContext);
+        }
 
-    {
-        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-            "Emitting the after-block marker"), pTCContext->pWorker);
-        pCurrentAsSeq->uIROfAfterBlock = ir_emit_marker_jump_target(pTCContext->pRepo, pTCContext);
-    }
+        if (pCurrentAsSeq->pVecPlaceholdersToElse)
+        {
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                "Block is of an 'if' or 'elif' kind => directly solving placeholder to the 'else' path now, to its after-block marker at IR #%u",
+                u64(pCurrentAsSeq->uIROfAfterBlock)), pTCContext->pWorker);
+            do_replace_jump_placeholders_to(pCurrentAsSeq->uIROfAfterBlock, *(pCurrentAsSeq->pVecPlaceholdersToElse),
+                pTCContext->pRepo, pTCContext);
+        }
 
-    if (pCurrentAsSeq->pVecPlaceholdersToElse)
-    {
-        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-            "Block is of an 'if' or 'elif' kind => directly solving placeholder to the 'else' path now, to its after-block marker at IR #%u",
-            u64(pCurrentAsSeq->uIROfAfterBlock)), pTCContext->pWorker);
-        do_replace_jump_placeholders_to(pCurrentAsSeq->uIROfAfterBlock, *(pCurrentAsSeq->pVecPlaceholdersToElse),
-            pTCContext->pRepo, pTCContext);
+
+    } else { // case of a non-scoped block
+        // => not really a 'block' as far as regular block termination strategies are concerned
+        Assert_(pCurrentAsSeq->pVecDeferredBlocksInDeclOrder == pParentAsSeq->pVecDeferredBlocksInDeclOrder);
+        Assert_(pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses == pParentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
+        Assert_(pCurrentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop == pParentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop);
     }
 }
 
@@ -854,66 +884,72 @@ local_func void do_handle_proc_end(TCContext* pTCContext)
             "Solving branches for whole emitted procedure (%u emitted blocks)", u64(uCountBlocks)), pTCContext->pWorker);
 
         for (u32 uBlock = 1u; uBlock < uCountBlocks; uBlock++) { // Starting from index 1 => skipping first emitted (should be root)
-            
             TCSeqSourceBlock* pBlock = pTCContext->vecTypecheckedBlocks[uBlock];
-            Assert_(pBlock->pVecPlaceholdersToAfterBlockAndAfterElses);
+            if (pBlock->pVecPlaceholdersToAfterBlockAndAfterElses) { // May not be the case if child of #if at root of proc
 
-            if (pBlock->pVecPlaceholdersToAfterBlockAndAfterElses->size()) {
+                if (pBlock->pVecPlaceholdersToAfterBlockAndAfterElses->size()) {
 
-                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-                    "Solving exits for block recorded in pos #%u (Ast %u)", u64(uBlock), u64(pBlock->uAstBlockIndex)), pTCContext->pWorker);
-                
-                u32 uCurrentBlockExitCandidate = pBlock->uIROfAfterBlock;
-                TCSeqSourceBlock* pParentBlock = (TCSeqSourceBlock*)pBlock->pParentBlock;
-                Assert_(pParentBlock);
-                u32 uCountStatementsInParent = pParentBlock->vecStatements.size();
-                u32 uIndexOfNextStatement = pBlock->uIndexOfParentStatementInParentBlock + 1u;
-                while (uIndexOfNextStatement < uCountStatementsInParent) {
-                    TCStatement* pNextStatement = pParentBlock->vecStatements[uIndexOfNextStatement];
-                    if (pNextStatement->pChildBlock == 0) // Next statement has no child block => cannot be a valid 'else' (or 'elif')
-                        break;
-                    TCSeqSourceBlock* pChildBlockOfNextStatement = (TCSeqSourceBlock*)pNextStatement->pChildBlock;
-                    if (0u == (pChildBlockOfNextStatement->uKindFlagsOfParentStatement & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND))
-                        break;
-                    // Otherwise, this next statement is indeed of an 'else' kind (or elif in an elif..else chain)
-                    // => we record its IR-after as possible position, and we need to continue iterating until we find a statement which is not.
-                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL8_REGULAR_INFO, EventREPT_CUSTOM_HARDCODED(
-                        "Next-Statement %u in parent-block (ast %u) is an else or elif => target of current block-end will be after that",
-                        u64(uIndexOfNextStatement), u64(pParentBlock->uAstBlockIndex)), pTCContext->pWorker);
-                    uCurrentBlockExitCandidate = pChildBlockOfNextStatement->uIROfAfterBlock;
-                    uIndexOfNextStatement++;
-                }
-                {
                     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-                        "Solving jumps and branches to block-exit towards IR position #%u", u64(uCurrentBlockExitCandidate)), pTCContext->pWorker);
-                    do_replace_jump_placeholders_to(uCurrentBlockExitCandidate, *(pBlock->pVecPlaceholdersToAfterBlockAndAfterElses),
-                        pTCContext->pRepo, pTCContext);
-                }
-                if (pBlock->pVecPlaceholdersToElse) {
-                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL8_REGULAR_INFO, EventREPT_CUSTOM_HARDCODED(
-                        "Note that this bloc is of an if-kind ; but its jumps-to-else were already solved"), pTCContext->pWorker);
-                }
+                        "Solving exits for block recorded in pos #%u (Ast %u)", u64(uBlock), u64(pBlock->uAstBlockIndex)), pTCContext->pWorker);
+                
+                    u32 uCurrentBlockExitCandidate = pBlock->uIROfAfterBlock;
+                    TCSeqSourceBlock* pParentBlock = (TCSeqSourceBlock*)pBlock->pParentBlock;
+                    Assert_(pParentBlock);
+                    u32 uCountStatementsInParent = pParentBlock->vecStatements.size();
+                    u32 uIndexOfNextStatement = pBlock->uIndexOfParentStatementInParentBlock + 1u;
+                    while (uIndexOfNextStatement < uCountStatementsInParent) {
+                        TCStatement* pNextStatement = pParentBlock->vecStatements[uIndexOfNextStatement];
+                        if (pNextStatement->pChildBlock == 0) // Next statement has no child block => cannot be a valid 'else' (or 'elif')
+                            break;
+                        TCSeqSourceBlock* pChildBlockOfNextStatement = (TCSeqSourceBlock*)pNextStatement->pChildBlock;
+                        if (0u == (pChildBlockOfNextStatement->uKindFlagsOfParentStatement & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND))
+                            break;
+                        // Otherwise, this next statement is indeed of an 'else' kind (or elif in an elif..else chain)
+                        // => we record its IR-after as possible position, and we need to continue iterating until we find a statement which is not.
+                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL8_REGULAR_INFO, EventREPT_CUSTOM_HARDCODED(
+                            "Next-Statement %u in parent-block (ast %u) is an else or elif => target of current block-end will be after that",
+                            u64(uIndexOfNextStatement), u64(pParentBlock->uAstBlockIndex)), pTCContext->pWorker);
+                        uCurrentBlockExitCandidate = pChildBlockOfNextStatement->uIROfAfterBlock;
+                        uIndexOfNextStatement++;
+                    }
+                    {
+                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                            "Solving jumps and branches to block-exit towards IR position #%u", u64(uCurrentBlockExitCandidate)), pTCContext->pWorker);
+                        do_replace_jump_placeholders_to(uCurrentBlockExitCandidate, *(pBlock->pVecPlaceholdersToAfterBlockAndAfterElses),
+                            pTCContext->pRepo, pTCContext);
+                    }
+                    if (pBlock->pVecPlaceholdersToElse) {
+                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL8_REGULAR_INFO, EventREPT_CUSTOM_HARDCODED(
+                            "Note that this bloc is of an if-kind ; but its jumps-to-else were already solved"), pTCContext->pWorker);
+                    }
 
+                } else {
+                    // this is a block with no recorded 'exits'...
+                    // maybe case of known infinite loops, eg "while true" ?
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                        "Block recorded in pos #%u (Ast %u) has no exits to solve...", u64(uBlock), u64(pBlock->uAstBlockIndex)), pTCContext->pWorker);
+                }
             } else {
-                // this is a block with no recorded 'exits'...
-                // maybe case of known infinite loops, eg "while true" ?
-                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-                    "Block recorded in pos #%u (Ast %u) has no exits to solve...", u64(uBlock), u64(pBlock->uAstBlockIndex)), pTCContext->pWorker);
+                Assert_(pBlock->pMapBlockDeclarationsById == pCurrentAsSeq->pMapBlockDeclarationsById);
             }
         }
     }
 
-    u32 uDeferCount = pCurrentAsSeq->vecDeferredBlocksInDeclOrder.size();
+    u32 uDeferCount = pCurrentAsSeq->pVecDeferredBlocksInDeclOrder->size();
     if (uDeferCount) {          // path in the presence of 'defers'
 
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
             "Defer already positionned on proc fallthrough"), pTCContext->pWorker);
 
         // This defer case is very simply handled, since we always emit deferred blocks, as soon as encountered,
-        //   towards "standard" block exit, which is this case will automatically be a defer chain to a final already emitted 'ret'
+        //   towards "standard" block exit, which is this case will automatically be a defer chain to a final already emitted 'ret' (naked)
         u32 uLastDefer = uDeferCount - 1u;
         // proc ending with ret (similar to the "default path" as appears below) will be already handled at the end of
         //   first-declared (and last-unstacked) deferred block, eventually reached by the defer chain to which we goto now:
+        u32 uGotoIR = ir_emit_goto((*pCurrentAsSeq->pVecDeferredBlocksInDeclOrder)[uLastDefer]->_uBlockOpeningIRIffSeq,
+            pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
+        Assert_(pCurrentAsSeq->vecStatements.size());
+        pCurrentAsSeq->vecStatements.last()->uLastIRorGlobalTCResult = uGotoIR;
 
     } else {                    // default-path
 
@@ -1209,7 +1245,7 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
 
                 typecheck_main_node:
                 Assert_(mainNode.pTCNode);
-                // even if 'wait' result, main tc node should not be 'typechecked' (nor in error)
+                // even if resuming a previous-'wait' result, main tc node should not be 'typechecked' (nor in error)
                 Assert_(is_node_tc_not_started(mainNode.pTCNode));
 
                 u8 uNodeKind = u8(pMainTcNode->ast.uNodeKindAndFlags);
@@ -1224,58 +1260,55 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
                         INVALID_NODE_INDEX, 0, 0, EInvocFormResultCount::EINVOC_NO_RETURN, &bWasMacroExpansion);
                     if (bWasMacroExpansion)
                         continue; // we'll thus retry typecheck from resulting statement at same position (if any...)
+                } else {
+                    switch (uNodeKind) {
+                        case ENodeKind::ENODE_ST_ASSIGNMENT:
+                            result = typecheck_assignment_statement(&mainNode, pStatement, pTCContext);
+                            break;
+                        case ENodeKind::ENODE_ST_OP_AND_ASSIGN:
+                            result = typecheck_op_and_assignment_statement(&mainNode, pStatement, pTCContext);
+                            break;
+                        case ENodeKind::ENODE_ST_USING: 
+                            result = typecheck_using_statement(&mainNode, pStatement, pTCContext);
+                            break;
+                        case ENodeKind::ENODE_ST_CONTROL_FLOW: 
+                            result = typecheck_control_flow_statement(&mainNode, pStatement, pTCContext);
+                            break;
+                        case ENodeKind::ENODE_ST_PAN_SPECIAL: 
+                            result = typecheck_pan_statement(&mainNode, pStatement, pTCContext);
+                            break;
+                        case ENodeKind::ENODE_EXPRLIST_NODE:
+                            result = typecheck_statement_level_exprlist(&mainNode, pStatement, pTCContext);
+                            break;
 
-                } else if (uNodeKind == ENodeKind::ENODE_ST_ASSIGNMENT) {
-                    result = typecheck_assignment_statement(&mainNode, pStatement, pTCContext);
+                        case ENodeKind::ENODE_ST_DECLARATION: {
+                            u8 uOp = u8(pMainTcNode->ast.uNodeKindAndFlags >> 8);
+                            bool bIsConst = (uOp == ETOK_CONST_DECL);
+                            Assert_(bIsConst || (uOp == ETOK_VARDECL));
+                            result = typecheck_declaration_statement(&mainNode, bIsConst, pStatement, pTCContext);
+                        } break;
 
-                } else if (uNodeKind == ENodeKind::ENODE_ST_OP_AND_ASSIGN) {
-                    result = typecheck_op_and_assignment_statement(&mainNode, pStatement, pTCContext);
+                        case ENodeKind::ENODE_SECONDARY_TOKEN_WRAPPER: {
+                            u32 uTrueMainNodeIndex = pMainTcNode->ast.uPrimaryChildNodeIndex;
+                            u8 uTok = u8(pMainTcNode->ast.uNodeKindAndFlags >> 8);
+                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL8_REGULAR_INFO, EventREPT_CUSTOM_HARDCODED(
+                                "Unwrapping sec-token wrapper before main node %u (token '%s')",
+                                u64(uTrueMainNodeIndex),
+                                reinterpret_cast<u64>(tStandardPayloadsStr[uTok])), pTCContext->pWorker);
+                            pMainTcNode = pStatement->vecNodes[uTrueMainNodeIndex];
+                            mainNode.pTCNode = pMainTcNode;
+                        } goto typecheck_main_node;
 
-                } else if (uNodeKind == ENodeKind::ENODE_ST_DECLARATION) {
-                    u8 uOp = u8(pMainTcNode->ast.uNodeKindAndFlags >> 8);
-                    bool bIsConst = (uOp == ETOK_CONST_DECL);
-                    Assert_(bIsConst || (uOp == ETOK_VARDECL));
-                    result = typecheck_declaration_statement(&mainNode, bIsConst, pStatement, pTCContext);
-    
-                } else if (uNodeKind == ENodeKind::ENODE_ST_USING) {
-                    Assert_(u8(pMainTcNode->ast.uNodeKindAndFlags >> 8) == ETOK_USING);
-                    result = typecheck_using_statement(&mainNode, pStatement, pTCContext);
-
-                } else if (uNodeKind >= ENodeKind::ENODE_ST_CONTROL_FLOW) {
-                    result = typecheck_control_flow_statement(&mainNode, uNodeKind, pStatement, pTCContext);
-
-                } else if (uNodeKind >= ENodeKind::ENODE_ST_PAN_SPECIAL) {
-                    result = typecheck_pan_statement(&mainNode, uNodeKind, pStatement, pTCContext);
-
-                } else if (uNodeKind == ENodeKind::ENODE_EXPRLIST_NODE) {
-                    result = typecheck_statement_level_exprlist(&mainNode, pStatement, pTCContext);
-
-                    /*
-                } else if (uNodeKind == ENodeKind::ENODE_EXPR_LOAD) {
-                    result = typecheck_statement_level_load(&mainNode, pStatement, pTCContext);
-
-                } else if (uNodeKind == ENodeKind::ENODE_EXPR_USING) {
-                    result = typecheck_statement_level_using(&mainNode, pStatement, pTCContext);
-                    */
-
-                } else if (uNodeKind <= ENodeKind::ENODE_SUBEXPR_SLICE) { // below this positions are 'expression' nodes
-                    result = typecheck_statement_level_expression(&mainNode, uNodeKind, pStatement, pTCContext);
-
-                } else if (uNodeKind == ENodeKind::ENODE_SECONDARY_TOKEN_WRAPPER) {
-                    {
-                        u32 uTrueMainNodeIndex = pMainTcNode->ast.uPrimaryChildNodeIndex;
-                        u8 uTok = u8(pMainTcNode->ast.uNodeKindAndFlags >> 8);
-                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL8_REGULAR_INFO, EventREPT_CUSTOM_HARDCODED(
-                            "Unwrapping sec-token wrapper before main node %u (token '%s')",
-                            u64(uTrueMainNodeIndex),
-                            reinterpret_cast<u64>(tStandardPayloadsStr[uTok])), pTCContext->pWorker);
-                        pMainTcNode = pStatement->vecNodes[uTrueMainNodeIndex];
-                        mainNode.pTCNode = pMainTcNode;
+                        default: {
+                            // if not in one of the above cases, then below this positions are all 'expression' nodes
+                            if (uNodeKind < ENodeKind::ENODE_SUBEXPR_SLICE) {
+                                result = typecheck_statement_level_expression(&mainNode, uNodeKind, pStatement, pTCContext);
+                            } else {
+                                // Other nodekinds, assumed invalid...
+                                result = typecheck_other_as_statement(&mainNode, uNodeKind, pStatement, pTCContext);
+                            }
+                        }
                     }
-                    goto typecheck_main_node;
-
-                } else { // other node kinds, assumed invalid
-                    result = typecheck_other_as_statement(&mainNode, uNodeKind, pStatement, pTCContext);
                 }
 
                 reset_arena_no_release_to(refTmpBeforeStatement, pTCContext->pWorker->tmpArena);

@@ -515,40 +515,76 @@ local_func TCBaseSourceBlock* tc_alloc_and_init_base_block(u32 uAstBlockIndex, u
     return pResult;
 }
 
-local_func TCDeclSourceBlock* tc_alloc_and_init_decl_block(u32 uAstBlockIndex, u32 uGlobalScope,
-    TCBaseSourceBlock* pParentBlock, TCContext* pTCContext)
+local_func TCDeclSourceBlock* tc_alloc_and_init_decl_block(u32 uAstBlockIndex,
+    TCBaseSourceBlock* pParentBlock, TCContext* pTCContext, bool bAvoidChangingScope = false)
 {
     SourceFileDescAndState* pSourceFile = pTCContext->pIsolatedSourceFile;
     TCDeclSourceBlock* pResult = (TCDeclSourceBlock*)alloc_from(pSourceFile->localArena,
         sizeof(TCDeclSourceBlock), alignof(TCDeclSourceBlock));
     init_base_block(pResult, uAstBlockIndex, pParentBlock, pTCContext);
-    FireAndForgetArenaAlloc localAlloc(pSourceFile->localArena);
-    pResult->mapBlockDeclarationsById.init(localAlloc);
+    if (bAvoidChangingScope) {
+        Assert_(pParentBlock);
+        pResult->pMapBlockDeclarationsById = ((TCDeclSourceBlock*)pParentBlock)->pMapBlockDeclarationsById;
+    } else {
+        FireAndForgetArenaAlloc localAlloc(pSourceFile->localArena);
+        pResult->pMapBlockDeclarationsById = (TmpMap<int, u32>*)alloc_from(pSourceFile->localArena,
+            sizeof(TmpMap<int, u32>), alignof(TmpMap<int, u32>));
+        pResult->pMapBlockDeclarationsById->init(localAlloc);
+    }
     return pResult;
 }
 
 local_func TCSeqSourceBlock* tc_alloc_and_init_seq_block(u32 uAstBlockIndex,
-    TCSeqSourceBlock* pParentBlock, u32 uStatementInParentBlock, TCContext* pTCContext)
+    TCSeqSourceBlock* pParentBlock, u32 uStatementInParentBlock, TCContext* pTCContext, bool bAvoidChangingScope = false)
 {
     SourceFileDescAndState* pSourceFile = pTCContext->pIsolatedSourceFile;
     TCSeqSourceBlock* pResult = (TCSeqSourceBlock*)alloc_from(pSourceFile->localArena,
         sizeof(TCSeqSourceBlock), alignof(TCSeqSourceBlock));
     init_base_block(pResult, uAstBlockIndex, pParentBlock, pTCContext);
-    FireAndForgetArenaAlloc localAlloc(pSourceFile->localArena);
-    pResult->mapBlockDeclarationsById.init(localAlloc);
-    pResult->vecDeferredBlocksInDeclOrder.init(localAlloc);
-    pResult->pVecPlaceholdersToAfterBlockAndAfterElses = 0;
-    pResult->pVecPlaceholdersToElse = 0;
+    if (bAvoidChangingScope) {
+        Assert_(pParentBlock);
+        pResult->pMapBlockDeclarationsById = pParentBlock->pMapBlockDeclarationsById;
+        pResult->pVecDeferredBlocksInDeclOrder = pParentBlock->pVecDeferredBlocksInDeclOrder;
+        pResult->pVecPlaceholdersToAfterBlockAndAfterElses = pParentBlock->pVecPlaceholdersToAfterBlockAndAfterElses;
+        pResult->pVecPlaceholdersToElse = pParentBlock->pVecPlaceholdersToElse;
+        pResult->uIRBeforeLoopConditionIfBlockIsLoop = pParentBlock->uIRBeforeLoopConditionIfBlockIsLoop;
+    } else {
+        FireAndForgetArenaAlloc localAlloc(pSourceFile->localArena);
+        pResult->pMapBlockDeclarationsById = (TmpMap<int, u32>*)alloc_from(pSourceFile->localArena,
+            sizeof(TmpMap<int, u32>), alignof(TmpMap<int, u32>));
+        pResult->pMapBlockDeclarationsById->init(localAlloc);
+        pResult->pVecDeferredBlocksInDeclOrder = (TmpArray<TCSeqSourceBlock*>*)alloc_from(pSourceFile->localArena,
+            sizeof(TmpArray<TCSeqSourceBlock*>), alignof(TmpArray<TCSeqSourceBlock*>));
+        pResult->pVecDeferredBlocksInDeclOrder->init(pSourceFile->localArena);
+        if (pParentBlock) {
+            pResult->pVecPlaceholdersToAfterBlockAndAfterElses = (TmpArray<u32>*)alloc_from(pSourceFile->localArena,
+                sizeof(TmpArray<u32>), alignof(TmpArray<u32>));
+            pResult->pVecPlaceholdersToAfterBlockAndAfterElses->init(pSourceFile->localArena);
+        } else {
+            pResult->pVecPlaceholdersToAfterBlockAndAfterElses = 0;
+        }
+        pResult->pVecPlaceholdersToElse = 0;
+        pResult->uIRBeforeLoopConditionIfBlockIsLoop = 0u;
+    }
     pResult->uIROfAfterBlock = 0u;
-    pResult->uIRBeforeLoopConditionIfBlockIsLoop = 0u;
     pResult->uIndexOfParentStatementInParentBlock = uStatementInParentBlock;
     pResult->uKindFlagsOfParentStatement = 0u;
-    if (pParentBlock) {
-        pResult->pVecPlaceholdersToAfterBlockAndAfterElses = (TmpArray<u32>*)alloc_from(pSourceFile->localArena,
-            sizeof(TmpArray<u32>), alignof(TmpArray<u32>));
-        pResult->pVecPlaceholdersToAfterBlockAndAfterElses->init(pSourceFile->localArena);
-    }
     return pResult;
+}
+
+local_func TCBaseSourceBlock* init_new_child_block_of_pan_from_tagged(u64 uTagged, TCContext* pTCContext)
+{
+    Assert_(uTagged & 0x01uLL);
+    u32 uAstBlockIndex = u32(uTagged >> 2); // when so, its ast block index is encoded in bits 2..33
+    if (has_ctx_seq_blocks(pTCContext)) {
+        return tc_alloc_and_init_seq_block(uAstBlockIndex, (TCSeqSourceBlock*)pTCContext->pCurrentBlock,
+            pTCContext->pCurrentBlock->uStatementBeingTypechecked, pTCContext, true); // last *true* to avoid affecting local scope
+    } else if (has_ctx_decl_blocks(pTCContext)) {
+        return tc_alloc_and_init_decl_block(uAstBlockIndex, pTCContext->pCurrentBlock, pTCContext, true);
+    } else {
+        return tc_alloc_and_init_base_block(uAstBlockIndex, pTCContext->pCurrentBlock->_uScopeLevelIffGlobal,
+            pTCContext->pCurrentBlock, pTCContext);
+    }
 }
 
 // predecls

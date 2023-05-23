@@ -452,6 +452,8 @@ struct UNWIND_INFO {     // Shall be DWORD-Aligned in image
 };
 
 struct UNWIND_CODE {
+    u8 uOffsetInProlog;
+    u8 uOperationCodeAndInfo;   // 4lsb code, 4msb info
 };
 
 #endif // LOCLIB_PE_H_

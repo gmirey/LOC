@@ -75,7 +75,11 @@ testenum :: enum u8
 	WEDNESDAY, THURSDAY
 	FRIDAY = 5, SATURDAY = 6, SUNDAY
 	
-my_tuesday :: testenum.TUESDAY
+#if testenum.WEDNESDAY == 3
+my_tuesday :: testenum.TUESDAY		// #if ... statements child further-indentation is *optional*
+#else
+	false :: should_not(compile)	// Won't be typechecked... but should however correctly *parse*, otherwise error
+#endif
 
 teststruct :: struct
 	a as int
@@ -221,6 +225,10 @@ FixedHeight :: 700
 // This is the 'windows' version of our 'main' proc
 win32_main :: proc (hInstance as wint.HINSTANCE) -> int
 	
+	print.print_ffstring("my_tuesday : ")
+	print.print_signed_dec64(int(my_tuesday),  0, u8(#" "), false)
+	print.print_ffstring("\n")
+
 	/*
 	iPerfCountPerSecond as i64
 	_ := kernel32.QueryPerformanceFrequency(&iPerfCountPerSecond)
@@ -241,21 +249,25 @@ win32_main :: proc (hInstance as wint.HINSTANCE) -> int
 	else
 		print.print_ffstring("timeBeginPeriod failed\n")
 	
+	#if true // #ifs in a sequential scope shall *not* spawn a new local scope for declarations
 	myWndClass as kernel32.WNDCLASSEX
+	#endif // => 'myWndClass' still defined in the following:
 	myWndClass.cbSize := sizeof kernel32.WNDCLASSEX
 
-	CS_BYTEALIGNCLIENT 		:: 0x1000
-	CS_BYTEALIGNWINDOW 		:: 0x2000
-	CS_CLASSDC				:: 0x0040
-	CS_DBLCLKS				:: 0x0008
-	CS_DROPSHADOW			:: 0x00020000
-	CS_GLOBALCLASS			:: 0x4000
-	CS_HREDRAW				:: 0x0002
-	CS_NOCLOSE				:: 0x0200
-	CS_OWNDC				:: 0x0020
-	CS_PARENTDC				:: 0x0080
-	CS_SAVEBITS				:: 0x0800
-	CS_VREDRAW				:: 0x0001
+	#if true // #ifs in a sequential scope shall *not* spawn a new local scope for declarations, even when their child-block is represented with indent
+		CS_BYTEALIGNCLIENT 		:: 0x1000
+		CS_BYTEALIGNWINDOW 		:: 0x2000
+		CS_CLASSDC				:: 0x0040
+		CS_DBLCLKS				:: 0x0008
+		CS_DROPSHADOW			:: 0x00020000
+		CS_GLOBALCLASS			:: 0x4000
+		CS_HREDRAW				:: 0x0002
+		CS_NOCLOSE				:: 0x0200
+		CS_OWNDC				:: 0x0020
+		CS_PARENTDC				:: 0x0080
+		CS_SAVEBITS				:: 0x0800
+		CS_VREDRAW				:: 0x0001
+	#endif // => all those CS_ still defined in the following:
 
 	/*
 	print.print_ffstring("WndClass Styles = 0x")

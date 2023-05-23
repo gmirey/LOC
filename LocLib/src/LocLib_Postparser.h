@@ -203,14 +203,28 @@ local_func void _check_paired_statements(BlockParsingState* pCurrentBlock, TmpAr
             }
             return;
 
-        case ESTATEMENT_PAN_ELIF: case ESTATEMENT_PAN_ELSE: case ESTATEMENT_PAN_ENDIF:
+        case ESTATEMENT_PAN_ELIF: case ESTATEMENT_PAN_ELSE:
             if (bLastStatementInError || !firstNodeInLastStatement || 
                 u8(firstNodeInLastStatement->uNodeKindAndFlags) != ENODE_ST_PAN_SPECIAL ||
                 (u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_IF &&
                  u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_ELIF))
             {
 #if TRACE_PRE_PARSER_PRINTLEVEL > 0
-                platform_log_info("*** #elif, #else or #endif directive without matching #if or #elif (as last statement of same block)", true);
+                platform_log_info("*** #elif or #else directive without matching #if or #elif (as last statement of same block)", true);
+#endif
+                post_parser_set_error_from_pre_statement(PERR_PAIRED_STATEMENT_MISSING_MATCHING_STATEMENT, pPreStatement);
+            }
+            return;
+
+        case ESTATEMENT_PAN_ENDIF:
+            if (bLastStatementInError || !firstNodeInLastStatement || 
+                u8(firstNodeInLastStatement->uNodeKindAndFlags) != ENODE_ST_PAN_SPECIAL ||
+                (u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_IF &&
+                 u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_ELIF &&
+                 u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_ELSE))
+            {
+#if TRACE_PRE_PARSER_PRINTLEVEL > 0
+                platform_log_info("*** #endif directive without matching #if or #elif or #else (as last statement of same block)", true);
 #endif
                 post_parser_set_error_from_pre_statement(PERR_PAIRED_STATEMENT_MISSING_MATCHING_STATEMENT, pPreStatement);
             }
@@ -1180,7 +1194,7 @@ local_func BlockParsingState* _open_child_block(BlockParsingState* tBlocks, TmpA
 
 local_func BlockParsingState* _convert_and_close_block(BlockParsingState* tBlocks, TmpArray<AstBlock*>* pVecFinalBlocks, BlockParsingState* pCurrentBlock,
                                             ParserParams& parserParams, EBlockSpawningState eBlockSpawningState,
-                                            Arena arenaForFinalAST)
+                                            Arena arenaForFinalAST, bool bClosedByPanDirective = false)
 {
 #if TRACE_PRE_PARSER_PRINTLEVEL > 1
     char szTmp[256];
@@ -1212,6 +1226,38 @@ local_func BlockParsingState* _convert_and_close_block(BlockParsingState* tBlock
             u32(pInFlightMissing->uByteCountOnLineToFirst);
         _convert_and_push_pre_statement_to_current_block(pCurrentBlock, pInFlightMissing, pVecFinalBlocks,
             parserParams.pSourceFile, parserParams.pOsFuncs, arenaForFinalAST, &uError);
+    }
+    // pan-directives such as #if or #startscope allow their child block to have same indentation as the block-opening statement.
+    if (pCurrentBlock->uPreParsingFlags & BLOCK_WAS_SPAWNED_AT_SAME_INDENT_AS_PARENT) {
+        // ... in which case, if we're not explicitely informed that we were being closed by a pan directive, this is an error: we need an explicit one...
+        if (!bClosedByPanDirective) {
+            debug_print_preparse_err("*** Closing block from indentation, when expecting #endif or #endscope");
+            pCurrentBlock->uPreParsingFlags |= BLOCK_IS_MISSING_CLOSING_PAN_DIRECTIVE;
+            LocLib_Error closingError;
+            closingError.errCode = PERR_MISSING_BLOCK_ENDING;
+            if (pCurrentBlock->vecStatements.size()) {
+                closingError.uBlockOrLineIfScanErr = pCurrentBlock->uIndexInBlockVec;
+                closingError.uStatement = pCurrentBlock->vecStatements.size() - 1u;
+                if (pCurrentBlock->vecStatements.last().uFlags & IN_ERROR_STATEMENT_MASK_EXCEPT_NOCHILD) {
+                    PreStatement* pAsPreStatement = reinterpret_cast<PreStatement*>(pCurrentBlock->vecStatements.last().tNodes);
+                    closingError.uTokenRef = make_packed_token_ref(pAsPreStatement->pivotToken1);
+                } else {
+                    closingError.uTokenRef = pCurrentBlock->vecStatements.last().tNodes->uPivotalTokenPackedRef;
+                }
+            } else {
+                Assert_(pCurrentBlock > tBlocks);
+                closingError.uBlockOrLineIfScanErr = (pCurrentBlock-1)->uIndexInBlockVec;
+                Assert_((pCurrentBlock-1)->vecStatements.size());
+                closingError.uStatement = (pCurrentBlock-1)->vecStatements.size() - 1u;
+                if ((pCurrentBlock-1)->vecStatements.last().uFlags & IN_ERROR_STATEMENT_MASK_EXCEPT_NOCHILD) {
+                    PreStatement* pAsPreStatement = reinterpret_cast<PreStatement*>((pCurrentBlock-1)->vecStatements.last().tNodes);
+                    closingError.uTokenRef = make_packed_token_ref(pAsPreStatement->pivotToken1);
+                } else {
+                    closingError.uTokenRef = (pCurrentBlock-1)->vecStatements.last().tNodes->uPivotalTokenPackedRef;
+                }
+            }
+            parserParams.pSourceFile->vecErrors.append(closingError);
+        }
     }
     AstBlock* pBlock = _convert_to_ast_block(pCurrentBlock, tBlocks, pVecFinalBlocks->_alloc.arena, arenaForFinalAST);
     u32 bClosedBlockInError = pCurrentBlock->uPreParsingFlags & IN_ERROR_BLOCK_MASK;
