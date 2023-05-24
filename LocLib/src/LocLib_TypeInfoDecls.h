@@ -156,7 +156,8 @@ enum EBuiltin {
 #define COMPOUNDFLAG_HAS_OVERLAPS           0x08u     // For unions (or structs with 'using' union members), indicates the presence of overlapped definitions indeed. 
 
 #define COMPOUNDTYPE_IS_COMPTIME_ONLY       0x80u     // For structs or unions having non-const members of a non-runtime type
-#define COMPOUNDTYPE_IS_STRUCT              0x08u     // Indicates that the compound is in fact a plain struct
+#define COMPOUNDTYPE_IS_PACKED              0x10u     // Indicates that the compound is in fact a *packed* struct
+#define COMPOUNDTYPE_IS_STRUCT              0x08u     // Indicates that the compound is in fact a plain, regular struct
 #define COMPOUNDTYPE_IS_ENUM                0x04u     // Indicates that the compound is in fact an enum
 #define COMPOUNDTYPE_IS_UNION               0x02u     // Indicates that the compound is in fact a union
 #define COMPOUNDTYPE_IS_VIEW                0x01u     // Indicates that the compound is in fact a struct *view*
@@ -238,19 +239,20 @@ local_func_inl void init_distinct_alias_type(TypeInfo_DistinctAlias* ioToInit, c
 // predecls
 struct TypeInfo_CompoundBase;
 struct TCStatement;
-struct TCDeclSourceBlock;
+struct TCBaseSourceBlock;
 struct TCContext;
 
 // 4x64b
 struct TCCompoundRegistration {
     TypeInfo_CompoundBase* pCompoundType;
     TCStatement* pStatementWithSignature;
-    TCDeclSourceBlock* pRootTcBlock;
+    TCBaseSourceBlock* pRootTcBlock;
     int iPrimaryIdentifier;
     u32 volatile uTCProgress;
     TmpSet<TCContext*> setWaitingConstOnly;
     TmpSet<TCContext*> setWaitingPossiblyRuntime;
 };
+
 
 struct TypeInfo_CompoundBase : public TypeInfo_UserBase {
     TCCompoundRegistration* pRegistration;
@@ -277,6 +279,8 @@ struct TypeInfo_Enum : public TypeInfo_CompoundBase {
     TmpArray<const TypeInfo_Enum*> vecUsed;
     ValueBinding* pLastValue;
 };
+static_assert(alignof(TypeInfo_Enum) >= 4, "TypeInfo_Enum alignment shall be at least 4 for usage as ScopedEntityHandle");
+
 local_func_inl const TypeInfo* get_base_type(const TypeInfo_Enum* pEnumType) { return pEnumType->pBaseType; }
 
 local_func_inl void init_enum_type_before_tc(TypeInfo_Enum* ioToInit, const TypeInfo_Integral* pBaseType, u8 uTypeFlags, u8 uStartingFlags, Arena arena) {
@@ -321,7 +325,8 @@ enum ECompoundTCProgress : u8 {
 struct TypeInfo_StructLike : public TypeInfo_CompoundBase {
     TmpMap<int, u32> mapAllMembers;
     TmpArray<ValueBinding*> vecAllMembers;  // we'll salvage the 'uIR' member from the ValueHolder there for 'uOffsetFromStart'.
-    TmpArray<const TypeInfo_StructLike*> vecIncluded;
+    TmpArray<u32> vecIncluded;              // the inclusions will be mock bindings, with <0 identifiers...
+                                            // being of the included *type* (should be a structlike) and same uOffsetFromStart trick
 };
 
 local_func_inl bool is_structlike_type_footprint_available(const TypeInfo_StructLike* pStructType)

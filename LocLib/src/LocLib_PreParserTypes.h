@@ -570,12 +570,14 @@ typedef PreAstNode* SpeContinuationParsingProc_Sign (ParserParams& parserParams,
     PARSER_META(COMPTIMEFUNC        , TYPE_DEF|EXPR_    , 0  ,  proclike_decl,               ,               ,               ) \
     PARSER_META(ENUM                , TYPE_DEF|EXPR_    , 0  ,      enum_decl,               ,               ,               ) \
     PARSER_META(STRUCT              , TYPE_DEF|EXPR_    , 0  ,structlike_decl,               ,               ,               ) \
+    PARSER_META(PACKED_STRUCT       , TYPE_DEF|EXPR_    , 0  ,structlike_decl,               ,               ,               ) \
     PARSER_META(VIEW                , 0                 , 0  ,               ,               ,               ,               ) \
     PARSER_META(UNION               , TYPE_DEF|EXPR_    , 0  ,structlike_decl,               ,               ,               ) \
     PARSER_META(HSET                , EXPR_             , 0  ,       set_decl,               ,               ,               ) \
     PARSER_META(HDIC                , UN_OP             , 0  ,               ,       map_decl,               ,               ) \
         \
 	PARSER_META(USING               , STATEMENT         , 0  ,               ,               ,  special_using,               ) \
+	PARSER_META(INCLUDING           , STATEMENT         , 0  ,               ,               ,  special_using,               ) \
 	PARSER_META(STATIC              , 0                 , 0  ,               ,               ,               ,               ) \
 	PARSER_META(DYNAMIC             , 0                 , 0  ,               ,               ,               ,               ) \
     PARSER_META(DISTINCT            , UN_OP             , 0  ,               ,               ,               ,               ) \

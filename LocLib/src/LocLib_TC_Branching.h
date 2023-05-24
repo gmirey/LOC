@@ -54,8 +54,6 @@ local_func ETCResult on_emit_or_solve_pseudo_boolean_op(TmpTCNode* pResultNode, 
 }
 
 // predecls
-ETCResult typecheck_expression(TmpTCNode* pExpr, TCStatement* pTCStatement,
-    TCContext* pTCContext, EExpectedExpr eExpectation, UpwardsInference inferredFromBelow);
 ETCResult typecheck_any_non_invoc_expression(TmpTCNode* pExpr, u8 uNodeKind, TCStatement* pTCStatement,
     TCContext* pTCContext, EExpectedExpr eExpectation, UpwardsInference inferredFromBelow);
 ETCResult typecheck_runtime_conditional(TmpTCNode* pNode, TCStatement* pTCStatement,
@@ -1584,6 +1582,37 @@ local_func ETCResult typecheck_return_statement(TmpTCNode* pMainNode, TCStatemen
     Assert_(pTCContext->eBlockKind == ETypecheckBlockKind::EBLOCKKIND_SEQ);
     TCSeqSourceBlock* pCurrentAsSeq = (TCSeqSourceBlock*)pTCContext->pCurrentBlock;
 
+#if 1 // killing previous 'logic'
+    i32 iAllScopedEntitiesCount = i32(pTCContext->pProcResult->vecScopedEntities.size());
+    for (i32 iScoped = iAllScopedEntitiesCount-1; iScoped >= 0; iScoped--) {
+        ScopedEntityHandle hScopedEntity = pTCContext->pProcResult->vecScopedEntities[u32(iScoped)];
+        if (get_scoped_entity_kind(hScopedEntity) == ESCOPEDENTITY_DEFER) {
+            RegisteredDeferInDeclOrder* pDeferred = get_scoped_entity_as_declared_defer(hScopedEntity);
+            // TODO: Change this test to compare against root for proc source once we have inlining
+            if (pCurrentAsSeq->pParentBlock) { // if we're not root block.  
+                // TODO: emission of markers for scope anyway ???
+                // Maybe not...
+                // TODO
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                    "typecheck_return_statement() : return jumping above non-root-scope-deferred blocks not yet implemented");
+            } else { // We're root block => any found defer is also at this convenient scope.
+                // if we're not jumping through several defers (impl scheme TODO) but we still have defers here,
+                //   then we're in the case where defer chain is already positionned to a final 'ret', so we simply need to branch to last defer
+                // => forcing-as-if there was an explicit goto-last-defer-with-default-exit statement at the end of this block
+                u32 uGotoIR = ir_emit_goto(pDeferred->pEmittedDeferedBlockWhenEncountered->_uBlockOpeningIRIffSeq,
+                    pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
+                pTCStatement->uLastIRorGlobalTCResult = uGotoIR;
+                return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+            }
+        }
+    }
+
+    // otherwise, emit naked return
+    u32 uRetPos = ir_emit_return(pTCContext->pRepo, pTCContext);
+    pTCStatement->uLastIRorGlobalTCResult = uRetPos;
+    return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+
+#else
     TCSeqSourceBlock* pCurrentOrAncestorAsSeq = pCurrentAsSeq;
     do {
         if (pCurrentOrAncestorAsSeq->pParentBlock) { // if we're not last
@@ -1616,6 +1645,7 @@ local_func ETCResult typecheck_return_statement(TmpTCNode* pMainNode, TCStatemen
         u32 uRetPos = ir_emit_return(pTCContext->pRepo, pTCContext);
         pTCStatement->uLastIRorGlobalTCResult = uRetPos;
     }
+#endif
 
     return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
 }
@@ -1822,14 +1852,14 @@ local_func ETCResult typecheck_control_flow_statement(TmpTCNode* pMainNode,
                                         pChildAsSeq->pVecPlaceholdersToElse = (TmpArray<u32>*)alloc_from(pSourceFile->localArena,
                                             sizeof(TmpArray<u32>), alignof(TmpArray<u32>));
                                         pChildAsSeq->pVecPlaceholdersToElse->init(pSourceFile->localArena);
-                                        pChildAsSeq->uKindFlagsOfParentStatement |= BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND; // an elif is else-kind
+                                        pChildAsSeq->uFlagsAndScopeBaseIndex |= BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND; // an elif is else-kind
                                         // And we now can assign it as a real pointer instead of tagged id.
                                         pTCStatement->pChildBlock = pChildAsSeq;
                                     } else {
                                         pChildAsSeq = (TCSeqSourceBlock*)pTCStatement->pChildBlock;
                                         Assert_(pChildAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
                                         Assert_(pChildAsSeq->pVecPlaceholdersToElse);
-                                        Assert_(pChildAsSeq->uKindFlagsOfParentStatement & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND);
+                                        Assert_(pChildAsSeq->uFlagsAndScopeBaseIndex & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND);
                                     }
                                     pWhenFalse = pChildAsSeq->pVecPlaceholdersToElse;
                                     Assert_(pWhenFalse);
@@ -1928,7 +1958,7 @@ local_func ETCResult typecheck_control_flow_statement(TmpTCNode* pMainNode,
                                         // And we spawn it now...
                                         TCSeqSourceBlock* pChildAsSeq = tc_alloc_and_init_seq_block(uAstBlockIndex, pCurrentAsSeq,
                                             pCurrentAsSeq->uStatementBeingTypechecked, pTCContext);
-                                        pChildAsSeq->uKindFlagsOfParentStatement |= BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND;
+                                        pChildAsSeq->uFlagsAndScopeBaseIndex |= BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND;
                                         // And we now can assign it as a real pointer instead of tagged id.
                                         pTCStatement->pChildBlock = pChildAsSeq;
 
@@ -1941,7 +1971,7 @@ local_func ETCResult typecheck_control_flow_statement(TmpTCNode* pMainNode,
                                         TCSeqSourceBlock* pChildAsSeq = (TCSeqSourceBlock*)pTCStatement->pChildBlock;
                                         Assert_(pChildAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
                                         Assert_(pChildAsSeq->pVecPlaceholdersToElse == 0);
-                                        Assert_(pChildAsSeq->uKindFlagsOfParentStatement & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND);
+                                        Assert_(pChildAsSeq->uFlagsAndScopeBaseIndex & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND);
                                     }
 
                                     return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);

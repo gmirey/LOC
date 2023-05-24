@@ -702,6 +702,7 @@ local_func TypeInfo_OtherCore* make_special_compact_ownedstring_format(WholeProg
     return pResult;
 }
 
+// TODO: CLEANUP: this should probably go away (reorgs core types and 'implicit structlike' concept)
 local_func ValueBinding* make_core_field_of_structlike_impl(int iIdentifierHandle, TypeInfo* pType, u32 uIndexInStruct, u32 uByteOffsetInStruct,
                                               WholeProgramCompilationState* pCompState)
 {
@@ -716,6 +717,7 @@ local_func ValueBinding* make_core_field_of_structlike_impl(int iIdentifierHandl
     return pResult;
 }
 
+// TODO: CLEANUP: this should probably go away (reorgs core types and 'implicit structlike' concept)
 local_func TypeInfo_OtherCore* make_special_stringview_format(WholeProgramCompilationState* pCompState, Arena tmpArena)
 {
     TypeInfo_OtherCore* pResult = (TypeInfo_OtherCore*)alloc_from(pCompState->globalArena, sizeof(TypeInfo_OtherCore), alignof(TypeInfo_OtherCore));
@@ -742,6 +744,7 @@ local_func TypeInfo_OtherCore* make_special_stringview_format(WholeProgramCompil
     return pResult;
 }
 
+// TODO: CLEANUP: this should probably go away (reorgs core types and 'implicit structlike' concept)
 local_func TypeInfo_OtherCore* make_special_ownedstring_format(WholeProgramCompilationState* pCompState, Arena tmpArena)
 {
     TypeInfo_OtherCore* pResult = (TypeInfo_OtherCore*)alloc_from(pCompState->globalArena, sizeof(TypeInfo_OtherCore), alignof(TypeInfo_OtherCore));
@@ -774,6 +777,7 @@ local_func TypeInfo_OtherCore* make_special_ownedstring_format(WholeProgramCompi
     return pResult;
 }
 
+// TODO: CLEANUP: this should probably go away (reorgs core types and 'implicit structlike' concept)
 local_func TypeInfo_OtherCore* make_special_any_format(WholeProgramCompilationState* pCompState, Arena tmpArena)
 {
     TypeInfo_OtherCore* pResult = (TypeInfo_OtherCore*)alloc_from(pCompState->globalArena, sizeof(TypeInfo_OtherCore), alignof(TypeInfo_OtherCore));

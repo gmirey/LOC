@@ -259,8 +259,7 @@ struct ValueBinding : public NodeValue {
     BindingSourceRefs sourceRef;   // 3x 64b behemoth just for cross-referencing the source... ??
 };
 
-// Note: No longer currently required
-//static_assert(alignof(ValueBinding) >= 16, "ValueBinding alignment shall be at least 16 to interact with IR");
+static_assert(alignof(ValueBinding) >= 4, "ValueBinding alignment shall be at least 4 for usage as ScopedEntityHandle");
 
 local_func_inl IRInfo get_info_from_value(const NodeValue* pNodeValue) {
     return pNodeValue->info;

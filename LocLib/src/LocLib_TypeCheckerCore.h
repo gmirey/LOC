@@ -60,6 +60,10 @@ local_func void emit_error(TmpTCNode* pNode, TCStatement* pTcStatement, TCContex
     const char* formatMsg, DisplayableCompilerEntity param1 = DCE_NONE,
     DisplayableCompilerEntity param2 = DCE_NONE, DisplayableCompilerEntity param3 = DCE_NONE)
 {
+    // TODO: CLEANUP: temporary forced log
+    platform_log_info("*** Tmp TC-Error Report : ", false);
+    platform_log_info(formatMsg, true);
+
     // TODO: Handle some error messages instead of this ?
     //      quick placeholder for some messaging system:
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("### Emitting Compilation Error : %s",
@@ -185,8 +189,9 @@ constexpr const char* tInvocFormResultCountStr[3] = {
     "RETURNS-1orMANY",
 };
 
+// predecl of our bread-and-butter typecheck-expression function, widely used throughout typechecker
 ETCResult typecheck_expression(TmpTCNode* pExpr, TCStatement* pTCStatement,
-    TCContext* pTCContext, EExpectedExpr eExpectation, UpwardsInference inferredFromBelow);
+    TCContext* pTCContext, EExpectedExpr eExpectation, UpwardsInference inferredFromBelow, bool bAllowUserTypeOrProcDecl = false);
 
 local_func void get_common_type_flags(const TypeInfo* pType,
     bool* outIsNumeric, bool* outIsIntegral, bool* outIsVecOfNumeric, bool* outIsVecOfIntegral,

@@ -94,7 +94,7 @@ struct TCStatement {
 
 enum ETypecheckBlockKind : u8 {
     EBLOCKKIND_BASE,
-    EBLOCKKIND_DECL,
+    //EBLOCKKIND_DECL,
     EBLOCKKIND_SEQ,
 };
 
@@ -115,22 +115,39 @@ struct TCBaseSourceBlock {
     };
 };
 
+/*
 // a specialization of an 'AST' block, for when it is known to be typechecked in a context allowing local declarations
 struct TCDeclSourceBlock : public TCBaseSourceBlock {
     TmpMap<int, u32>* pMapBlockDeclarationsById;
+    TmpArray<ReferencedNamespace*>* pVecUsedNamespace;
+    TmpArray<const TypeInfo_Enum*>* pVecUsedEnums;
 };
+*/
 
-#define BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND     0x0001u // positionned on 'uKindFlagsOfParentStatement' of the TCSeqSourceBlock instanciated as the child of an else (or elif) block.
+#define BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND     0x8000'0000u // positionned on 'uFlagsAndScopeBaseIndex' of the TCSeqSourceBlock instanciated as the child of an else (or elif) block.
+#define BLOCKFLAG_IS_NON_SCOPING                    0x4000'0000u // positionned on 'uFlagsAndScopeBaseIndex' of the TCSeqSourceBlock instanciated as the child of an #if-kind, which should not affect local scopes.
+
+#define BLOCK_SCOPED_ENTITY_BASE_INDEX_MASK         0x0FFF'FFFFu // for extracting base index from 'uFlagsAndScopeBaseIndex'
+
+// predecls
+struct ReferencedNamespace;
+struct TypeInfo_Enum;
 
 // a specialization of an 'AST' block, for when it is known to be typechecked in the context of typechecking a proc-like body
-struct TCSeqSourceBlock : public TCDeclSourceBlock {
+struct TCSeqSourceBlock : public TCBaseSourceBlock {
+    /*
+    TmpMap<int, u32>* pMapBlockDeclarationsById;
+    TmpArray<ReferencedNamespace*>* pVecUsedNamespace;
+    TmpArray<const TypeInfo_Enum*>* pVecUsedEnums;
+    // the above, previosuly from TCDeclSourceBlock
     TmpArray<TCSeqSourceBlock*>* pVecDeferredBlocksInDeclOrder;
+    */
     TmpArray<u32>* pVecPlaceholdersToAfterBlockAndAfterElses; // general block exit ; and exit after when true in case block is an if (or elif)
     TmpArray<u32>* pVecPlaceholdersToElse;                  // in case block is child of an if (or elif), this is the vector to false
     u32 uIROfAfterBlock;                                    // after block emission, position of the next marker-jump target (considered as part of parent block)
     u32 uIRBeforeLoopConditionIfBlockIsLoop;                // in case block is child of a while (or for), this is the ir of the jump target to goto at block end
     u32 uIndexOfParentStatementInParentBlock;               // in case block is child, this is the index of its parent statement in parent TCSeqSourceBlock
-    u32 uKindFlagsOfParentStatement;                        // in case block is child, holds flags for its *parent* statement, such as BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND
+    u32 uFlagsAndScopeBaseIndex;                            // holds flags such as BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND, BLOCKFLAG_IS_NON_SCOPING ; + size of scoped entities vector at block start
 };
 
 // the structure representing a whole proc-like body (only as a 'source' here => for IR emission and stuff, see 'TCProcBodyResult')
@@ -190,12 +207,69 @@ struct LocalErrCheck {
     u32 uFlagsAndKind;      // is active, is taken when non-zero, uKind on 8lsb
 };
 
+__declspec(align(8))
+struct RegisteredDeferInDeclOrder {
+    TCSeqSourceBlock* pEmittedDeferedBlockWhenEncountered;
+    AstBlock* pOriginalAst;
+};
+static_assert(alignof(RegisteredDeferInDeclOrder) >= 4, "RegisteredDeferInDeclOrder alignment shall be at least 4 for usage as ScopedEntityHandle");
+
+enum EScopedEntityKind : u32 {
+    ESCOPEDENTITY_BINDING = 0,          // var or const - can reinterpret ScopedEntityHandle as ValueBinding*
+    ESCOPEDENTITY_USE_NAMESPACE = 1,    // can reinterpret ScopedEntityHandle (untagged) as ReferencedNamespace*
+    ESCOPEDENTITY_USE_ENUM = 2,         // can reinterpret ScopedEntityHandle (untagged) as const TypeInfo_Enum*
+    ESCOPEDENTITY_DEFER = 3,            // can reinterpret ScopedEntityHandle (untagged) as 
+};
+union ScopedEntityHandle {
+    ValueBinding* pAsBinding;
+    u64 _payload;
+};
+local_func_inl ScopedEntityHandle make_scoped_entity(ValueBinding* pBinding) {
+    static_assert(ESCOPEDENTITY_BINDING == 0, "ESCOPEDENTITY_BINDING should be 0");
+    ScopedEntityHandle result; result.pAsBinding = pBinding; return result;
+}
+local_func_inl ScopedEntityHandle make_scoped_entity(ReferencedNamespace* pNamespace) {
+    ScopedEntityHandle result; result._payload = reinterpret_cast<u64>(pNamespace)|ESCOPEDENTITY_USE_NAMESPACE;
+    return result;
+}
+local_func_inl ScopedEntityHandle make_scoped_entity(const TypeInfo_Enum* pEnum) {
+    ScopedEntityHandle result; result._payload = reinterpret_cast<u64>(pEnum)|ESCOPEDENTITY_USE_ENUM;
+    return result;
+}
+local_func_inl ScopedEntityHandle make_scoped_entity(RegisteredDeferInDeclOrder* pDefer) {
+    ScopedEntityHandle result; result._payload = reinterpret_cast<u64>(pDefer)|ESCOPEDENTITY_DEFER;
+    return result;
+}
+local_func_inl EScopedEntityKind get_scoped_entity_kind(ScopedEntityHandle entityHandle) {
+    return EScopedEntityKind(u32(entityHandle._payload) & 0x07u);
+}
+local_func_inl u8* get_untagged_scoped_entity(ScopedEntityHandle entityHandle) {
+    return reinterpret_cast<u8*>(entityHandle._payload & 0xFFFF'FFFF'FFFF'FFF0uLL);
+}
+local_func_inl ValueBinding* get_scoped_entity_as_declared_binding(ScopedEntityHandle entityHandle) {
+    Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_BINDING);
+    return (ValueBinding*)get_untagged_scoped_entity(entityHandle);
+}
+local_func_inl ReferencedNamespace* get_scoped_entity_as_used_namespace(ScopedEntityHandle entityHandle) {
+    Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_USE_NAMESPACE);
+    return (ReferencedNamespace*)get_untagged_scoped_entity(entityHandle);
+}
+local_func_inl const TypeInfo_Enum* get_scoped_entity_as_used_enum(ScopedEntityHandle entityHandle) {
+    Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_USE_ENUM);
+    return (const TypeInfo_Enum*)get_untagged_scoped_entity(entityHandle);
+}
+local_func_inl RegisteredDeferInDeclOrder* get_scoped_entity_as_declared_defer(ScopedEntityHandle entityHandle) {
+    Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_DEFER);
+    return (RegisteredDeferInDeclOrder*)get_untagged_scoped_entity(entityHandle);
+}
+
 struct GraphResult;
 // the structure representing a whole proc-like body (as a 'result' : for the typechecked nodes, see 'TCProcBodySource')
 struct TCProcBodyResult {
     const TypeInfo_ProcLike* procSign;
     IRRepo procwiseRepo;
-    TmpArray<ValueBinding*> vecBindings;    // all encountered block-local declarations are gathered here
+    TmpArray<ScopedEntityHandle> vecScopedEntities;    // all encountered block-local declarations (bindings, using, defers) are gathered here... stack-like as TCing goes => temporary
+    TmpArray<ValueBinding*> vecBindings;    // all encountered bindings are remembered here
     TmpArray<LocalErrCheck> vecErrChecks;   // keeps track of all IR indices and corresponding Ast where auto error-checks were inserted
     int iPrimaryIdentifier;
     u32 volatile uProcBodyTypechekingStatus;  // can also indicate 'foreign' status, in which case most of the other stuff is unused
@@ -244,7 +318,7 @@ struct TCContext : public IRAwareContext {
     //
 
     // this is where local bindings are indexed, from map of id-to-index in decl-block (usually pointing to array within pProcResult)
-    TmpArray<ValueBinding*>* pVecLocalBindings;
+    //TmpArray<ValueBinding*>* pVecLocalBindings;
 
     // 
     // the following if is_ctx_with_proc_source
@@ -285,7 +359,7 @@ local_func_inl bool is_ctx_with_proc_source(const TCContext* pCtx) { return pCtx
 local_func_inl bool is_ctx_proc_expansion(const TCContext* pCtx) { return pCtx->eKind >= ECTXKIND_INLINEEXP; }
 local_func_inl bool is_ctx_regular_proc_body(const TCContext* pCtx) { return pCtx->eKind == ECTXKIND_PROCBODY; }
 
-local_func_inl bool has_ctx_decl_blocks(const TCContext* pCtx) { return pCtx->eBlockKind >= EBLOCKKIND_DECL; }
+//local_func_inl bool has_ctx_decl_blocks(const TCContext* pCtx) { return pCtx->eBlockKind >= EBLOCKKIND_DECL; }
 local_func_inl bool has_ctx_seq_blocks(const TCContext* pCtx) { return pCtx->eBlockKind == EBLOCKKIND_SEQ; }
 
 local_func_inl SourceFileDescAndState* get_tc_ctx_ensured_isolated_file(TCContext* pCtx) {
@@ -310,22 +384,27 @@ enum EDeclAttributes {
     */
 };
 
+/*
 local_func_inl bool does_tc_ctx_require_declare_as_local(TCContext* pCtx, EDeclAttributes attr) {
     Assert(attr == EDeclAttributes::EDECLATTR_REGULAR_CONST || attr == EDeclAttributes::EDECLATTR_REGULAR_VAR,
         "decl attribute kind not yet implemented"); // TODO
     return pCtx->uFlags & CTXFLAG_DECLARATIONS_ARE_LOCAL;
 }
+*/
 
 enum EIdentAttributes {
     EIDENTATTR_REGULAR,
 };
 
+/*
 local_func_inl bool does_tc_ctx_resolve_identifiers_locally(TCContext* pCtx, EIdentAttributes attr) {
     Assert(attr == EIdentAttributes::EIDENTATTR_REGULAR,
         "ident attribute kind not yet implemented"); // TODO
     return pCtx->uFlags & CTXFLAG_RESOLUTIONS_START_LOCAL;
 }
+*/
 
+/*
 local_func_inl SourceFileDescAndState* get_tc_global_resolution_file(TCContext* pCtx, EIdentAttributes attr) {
     Assert(attr == EIdentAttributes::EIDENTATTR_REGULAR,
         "ident attribute kind not yet implemented"); // TODO
@@ -335,26 +414,32 @@ local_func_inl SourceFileDescAndState* get_tc_global_resolution_file(TCContext* 
 local_func_inl TmpArray<ValueBinding*>* get_tc_ctx_local_resolution_registry(TCContext* pCtx, EIdentAttributes attr) {
     Assert(attr == EIdentAttributes::EIDENTATTR_REGULAR,
         "ident attribute kind not yet implemented"); // TODO
-    Assert_(has_ctx_decl_blocks(pCtx));
+    Assert_(has_ctx_seq_blocks(pCtx));
+    Assert_(pCtx->pVecLocalBindings);
     return pCtx->pVecLocalBindings;
 }
+*/
 
 local_func_inl TCProcBodyResult* get_tc_ctx_proc_result(TCContext* pCtx) {
     Assert_(pCtx->pProcResult);
     return pCtx->pProcResult;
 }
 
-local_func_inl TCDeclSourceBlock* get_tc_ctx_local_declaration_block(TCContext* pCtx, EDeclAttributes attr) {
+/*
+local_func_inl TCSeqSourceBlock* get_tc_ctx_local_declaration_block(TCContext* pCtx, EDeclAttributes attr) {
     Assert(attr == EDeclAttributes::EDECLATTR_REGULAR_CONST || attr == EDeclAttributes::EDECLATTR_REGULAR_VAR,
         "decl attribute kind not yet implemented"); // TODO
-    Assert_(has_ctx_decl_blocks(pCtx));
-    return (TCDeclSourceBlock*)pCtx->pCurrentBlock;
+    Assert_(has_ctx_seq_blocks(pCtx));
+    return (TCSeqSourceBlock*)pCtx->pCurrentBlock;
 }
+*/
 
+/*
 local_func_inl TmpArray<ValueBinding*>* get_tc_ctx_local_declaration_registry(TCContext* pCtx, EDeclAttributes attr) {
     Assert(attr == EDeclAttributes::EDECLATTR_REGULAR_CONST || attr == EDeclAttributes::EDECLATTR_REGULAR_VAR,
         "decl attribute kind not yet implemented"); // TODO
-    Assert_(has_ctx_decl_blocks(pCtx));
+    Assert_(has_ctx_seq_blocks(pCtx));
+    Assert_(pCtx->pVecLocalBindings);
     return pCtx->pVecLocalBindings;
 }
 
@@ -363,6 +448,7 @@ local_func_inl SourceFileDescAndState* get_tc_global_declaration_file(TCContext*
         "decl attribute kind not yet implemented"); // TODO
     return pCtx->pIsolatedSourceFile; // TODO: check if always the case ?
 }
+*/
 
 local_func_inl bool does_tc_ctx_allow_shadowing_globals(TCContext* pCtx, EDeclAttributes attr) {
     Assert(attr == EDeclAttributes::EDECLATTR_REGULAR_CONST || attr == EDeclAttributes::EDECLATTR_REGULAR_VAR,

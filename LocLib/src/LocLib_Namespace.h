@@ -71,10 +71,12 @@ struct LaggedNamespaceState {
     TmpMap<u64, ReferencedNamespace*> mapKnownOthersUsingThis;                  // These are all the namespaces which are known *directly* 'using' this one
 };
 
+__declspec(align(8))
 struct ReferencedNamespace {
     TCNamespace* pOrigNamespace;            // The TCNamespace, directly in the file having defined it (can also be the root namespace for said file). Can also point to 'itself' in case the referencing is file-to-same-file.
     LaggedNamespaceState laggedState;       // The "referenced" state of the namespace, either updated locally to the file, or as a copy of some version of it for other files.
 };
+static_assert(alignof(ReferencedNamespace) >= 4, "ReferencedNamespace alignment shall be at least 4 for usage as ScopedEntityHandle");
 
 struct SourceFileDescAndState;
 struct TCNamespace {
@@ -93,8 +95,10 @@ struct TCNamespace {
     TmpMap<int, u32> mapPublicDeclarationsById;         // this map points to the binding repository of the *original source file*
     TmpMap<int, u32> mapAccessibleDeclarationsById;     // this map points to the binding repository of the *original source file*, and includes public, and package.
     TmpMap<int, u32> mapAllGlobalDeclarationsById;      // this map points to the binding repository of the *original source file*, and includes public, package and privates.
-    TmpArray<ReferencedNamespace*> vecUsedNamespaces;   // These are all the namespaces which are known declared as *using*
-    TmpArray<const TypeInfo_Enum*> vecUsedEnums;        // These are all the *enums* which are known declared as *using*
+    TmpArray<ReferencedNamespace*> vecAllUsedNamespaces;   // These are all the namespaces which are known declared as *using*
+    TmpArray<const TypeInfo_Enum*> vecAllUsedEnums;        // These are all the *enums* which are known declared as *using*
+    TmpArray<ReferencedNamespace*> vecAccessibleUsedNamespaces;   // These are the namespaces which are known declared as *using* outside of a private scope
+    TmpArray<const TypeInfo_Enum*> vecAccessibleUsedEnums;        // These are the *enums* which are known declared as *using* outside of a private scope
 
     TmpSet<int> setOfNewlyDeclaredGlobalIdentifiers;    // global identifiers, newly declared on a TC pass, for fast-iteration to a lagged state (and waking up tasks).
 

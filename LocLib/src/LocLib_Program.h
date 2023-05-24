@@ -756,7 +756,7 @@ local_func TCContext* make_typecheck_task_for_whole_source_file(SourceFileDescAn
 
     // the following are unused for basic, root level context
 
-    pResult->pVecLocalBindings = 0;
+    //pResult->pVecLocalBindings = 0;
     pResult->pProcResult = 0;
     pResult->pProcSource = 0;
     pResult->vecTypecheckedBlocks = {};
@@ -784,25 +784,30 @@ local_func void do_handle_seq_block_exit(TCContext* pTCContext)
     TCSeqSourceBlock* pCurrentAsSeq = (TCSeqSourceBlock*)pTCContext->pCurrentBlock;
     TCSeqSourceBlock* pParentAsSeq = (TCSeqSourceBlock*)pTCContext->pCurrentBlock->pParentBlock;
 
-    if (pCurrentAsSeq->pMapBlockDeclarationsById != pParentAsSeq->pMapBlockDeclarationsById) { // nominal case
-        Assert_(pCurrentAsSeq->pVecDeferredBlocksInDeclOrder != pParentAsSeq->pVecDeferredBlocksInDeclOrder);
+    if (0u == (pCurrentAsSeq->uFlagsAndScopeBaseIndex & BLOCKFLAG_IS_NON_SCOPING)) { // nominal case
+
+        //Assert_(pCurrentAsSeq->pVecDeferredBlocksInDeclOrder != pParentAsSeq->pVecDeferredBlocksInDeclOrder);
         Assert_(pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses != pParentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
 
-        u32 uDeferCount = pCurrentAsSeq->pVecDeferredBlocksInDeclOrder->size();
-        if (uDeferCount) { // path in the presence of defers
+        i32 iBaseScopedDeclIndex = i32(pCurrentAsSeq->uFlagsAndScopeBaseIndex & BLOCK_SCOPED_ENTITY_BASE_INDEX_MASK);
+        i32 iScopedEntityCount = i32(pTCContext->pProcResult->vecScopedEntities.size());
+        for (i32 iScopedEntity = iScopedEntityCount-1; iScopedEntity >= iBaseScopedDeclIndex; iScopedEntity--) {
+            ScopedEntityHandle hScopedEntity = pTCContext->pProcResult->vecScopedEntities[iScopedEntity];
+            if (get_scoped_entity_kind(hScopedEntity) == ESCOPEDENTITY_DEFER) { // path in the presence of defers
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                    "Defer already positionned on block fallthrough"), pTCContext->pWorker);
+                RegisteredDeferInDeclOrder* pLastDeclaredDefer = get_scoped_entity_as_declared_defer(hScopedEntity);
+                // This defer case is very simply handled, since we always emit deferred blocks, as soon as encountered,
+                //   towards "standard" block exit (or LOOP) => All we'd need to to here is to branch to start-IR for that last deferred block.
+                // scope ending (similar to the "default path" as appears below) will be already handled at the end of
+                //   first-declared (and last-unstacked) deferred block, eventually reached by the defer chain to which we goto now:
+                ir_emit_goto(pLastDeclaredDefer->pEmittedDeferedBlockWhenEncountered->_uBlockOpeningIRIffSeq,
+                    pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
+                goto after_default_path;
+            }
+        }
 
-            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-                "Defer already positionned on block fallthrough"), pTCContext->pWorker);
-
-            // This defer case is very simply handled, since we always emit deferred blocks, as soon as encountered,
-            //   towards "standard" block exit (or LOOP) => All we'd need to to here is to branch to start-IR for that last deferred block.
-            u32 uLastDefer = uDeferCount - 1u;
-            // scope ending (similar to the "default path" as appears below) will be already handled at the end of
-            //   first-declared (and last-unstacked) deferred block, eventually reached by the defer chain to which we goto now:
-            ir_emit_goto((*pCurrentAsSeq->pVecDeferredBlocksInDeclOrder)[uLastDefer]->_uBlockOpeningIRIffSeq,
-                pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
-
-        } else {                // default-path
+        { default_path: // Will be skipped if found defer
             
             BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
                 "Block fallthrough, without defer"), pTCContext->pWorker);
@@ -831,7 +836,9 @@ local_func void do_handle_seq_block_exit(TCContext* pTCContext)
                 pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses->append(uGotoIR);
             }
 
-        }
+        } 
+
+        after_default_path:
 
         {
             BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
@@ -848,10 +855,12 @@ local_func void do_handle_seq_block_exit(TCContext* pTCContext)
                 pTCContext->pRepo, pTCContext);
         }
 
+        Assert_(iBaseScopedDeclIndex >= (pParentAsSeq->uFlagsAndScopeBaseIndex & BLOCK_SCOPED_ENTITY_BASE_INDEX_MASK));
+        pTCContext->pProcResult->vecScopedEntities.resize_non_zeroing(u32(iBaseScopedDeclIndex));
 
     } else { // case of a non-scoped block
         // => not really a 'block' as far as regular block termination strategies are concerned
-        Assert_(pCurrentAsSeq->pVecDeferredBlocksInDeclOrder == pParentAsSeq->pVecDeferredBlocksInDeclOrder);
+        //Assert_(pCurrentAsSeq->pVecDeferredBlocksInDeclOrder == pParentAsSeq->pVecDeferredBlocksInDeclOrder);
         Assert_(pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses == pParentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses);
         Assert_(pCurrentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop == pParentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop);
     }
@@ -861,7 +870,7 @@ local_func void do_handle_proc_end(TCContext* pTCContext)
 {
     Assert_(pTCContext->eBlockKind == ETypecheckBlockKind::EBLOCKKIND_SEQ);
     Assert_(pTCContext->pProcResult);
-    Assert_(pTCContext->pCurrentBlock->pParentBlock == 0);
+    Assert_(pTCContext->pCurrentBlock->pParentBlock == 0); // TODO: change this check to comparison with root of source once we do inlining
 
     Assert(pTCContext->eKind == ETypecheckContextKind::ECTXKIND_PROCBODY,
         "do_handle_proc_end() not yet implemented for expansions"); // TODO !!
@@ -873,6 +882,7 @@ local_func void do_handle_proc_end(TCContext* pTCContext)
     Assert_(pCurrentAsSeq->uIRBeforeLoopConditionIfBlockIsLoop == INVALID_IR_CODE);
     Assert_(pCurrentAsSeq->pVecPlaceholdersToAfterBlockAndAfterElses == 0);
     Assert_(pCurrentAsSeq->pVecPlaceholdersToElse == 0);
+    Assert_(0u == (pCurrentAsSeq->uFlagsAndScopeBaseIndex & BLOCKFLAG_IS_NON_SCOPING));
 
     Assert_(pTCContext->vecTypecheckedBlocks._alloc.arena.root_chunk_handle.uTagged != 0uLL);
     u32 uCountBlocks = pTCContext->vecTypecheckedBlocks.size();
@@ -902,7 +912,7 @@ local_func void do_handle_proc_end(TCContext* pTCContext)
                         if (pNextStatement->pChildBlock == 0) // Next statement has no child block => cannot be a valid 'else' (or 'elif')
                             break;
                         TCSeqSourceBlock* pChildBlockOfNextStatement = (TCSeqSourceBlock*)pNextStatement->pChildBlock;
-                        if (0u == (pChildBlockOfNextStatement->uKindFlagsOfParentStatement & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND))
+                        if (0u == (pChildBlockOfNextStatement->uFlagsAndScopeBaseIndex & BLOCKFLAG_PARENT_STATEMENT_IS_ELSE_KIND))
                             break;
                         // Otherwise, this next statement is indeed of an 'else' kind (or elif in an elif..else chain)
                         // => we record its IR-after as possible position, and we need to continue iterating until we find a statement which is not.
@@ -930,35 +940,36 @@ local_func void do_handle_proc_end(TCContext* pTCContext)
                         "Block recorded in pos #%u (Ast %u) has no exits to solve...", u64(uBlock), u64(pBlock->uAstBlockIndex)), pTCContext->pWorker);
                 }
             } else {
-                Assert_(pBlock->pMapBlockDeclarationsById == pCurrentAsSeq->pMapBlockDeclarationsById);
+                Assert_(pBlock->uFlagsAndScopeBaseIndex & BLOCKFLAG_IS_NON_SCOPING);
             }
         }
     }
 
-    u32 uDeferCount = pCurrentAsSeq->pVecDeferredBlocksInDeclOrder->size();
-    if (uDeferCount) {          // path in the presence of 'defers'
+    i32 iBaseScopedDeclIndex = i32(pTCContext->pProcSource->pRootTcBlock->uFlagsAndScopeBaseIndex & BLOCK_SCOPED_ENTITY_BASE_INDEX_MASK);
+    i32 iScopedEntityCount = i32(pTCContext->pProcResult->vecScopedEntities.size());
+    for (i32 iScopedEntity = iScopedEntityCount-1; iScopedEntity >= iBaseScopedDeclIndex; iScopedEntity--) {
+        ScopedEntityHandle hScopedEntity = pTCContext->pProcResult->vecScopedEntities[iScopedEntity];
+        if (get_scoped_entity_kind(hScopedEntity) == ESCOPEDENTITY_DEFER) { // path in the presence of defers
+            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+                "Defer already positionned on proc fallthrough"), pTCContext->pWorker);
+            RegisteredDeferInDeclOrder* pLastDeclaredDefer = get_scoped_entity_as_declared_defer(hScopedEntity);
+            // This defer case is very simply handled, since we always emit deferred blocks, as soon as encountered,
+            //   towards "standard" block exit, which is this case will automatically be a defer chain to a final already emitted 'ret' (naked)
+            // proc ending with ret (similar to the "default path" as appears below) will be already handled at the end of
+            //   first-declared (and last-unstacked) deferred block, eventually reached by the defer chain to which we goto now:
+            u32 uGotoIR = ir_emit_goto(pLastDeclaredDefer->pEmittedDeferedBlockWhenEncountered->_uBlockOpeningIRIffSeq,
+                pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
+            Assert_(pCurrentAsSeq->vecStatements.size());
+            pCurrentAsSeq->vecStatements.last()->uLastIRorGlobalTCResult = uGotoIR;
+            return; // and we're done !
+        }
+    } // otherwise fallthrough default path:
 
-        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-            "Defer already positionned on proc fallthrough"), pTCContext->pWorker);
+    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
+        "Emitting naked return for proc fallthrough"), pTCContext->pWorker);
 
-        // This defer case is very simply handled, since we always emit deferred blocks, as soon as encountered,
-        //   towards "standard" block exit, which is this case will automatically be a defer chain to a final already emitted 'ret' (naked)
-        u32 uLastDefer = uDeferCount - 1u;
-        // proc ending with ret (similar to the "default path" as appears below) will be already handled at the end of
-        //   first-declared (and last-unstacked) deferred block, eventually reached by the defer chain to which we goto now:
-        u32 uGotoIR = ir_emit_goto((*pCurrentAsSeq->pVecDeferredBlocksInDeclOrder)[uLastDefer]->_uBlockOpeningIRIffSeq,
-            pTCContext->pRepo, pTCContext, EBranchKind::BRANCH_TAKEN_TO_DEFAULT_DEFER);
-        Assert_(pCurrentAsSeq->vecStatements.size());
-        pCurrentAsSeq->vecStatements.last()->uLastIRorGlobalTCResult = uGotoIR;
-
-    } else {                    // default-path
-
-        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-            "Emitting naked return for proc fallthrough"), pTCContext->pWorker);
-
-        // a naked return in IR in case of fall-through...
-        ir_emit_return(pTCContext->pRepo, pTCContext);
-    }
+    // a naked return in IR in case of fall-through...
+    ir_emit_return(pTCContext->pRepo, pTCContext);  // CLEANUP ? currently not registered as 'uLastIRorGlobalTCResult' of anything here
 
 }
 
@@ -1118,7 +1129,7 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
                 pTCContext->pWorker);
 
             if (pTCContext->pIsolatedSourceFile->iBlockCount > 0 && pTCContext->pIsolatedSourceFile->tBlocks->uStatementCount > 0)
-                pTCContext->pCurrentBlock = tc_alloc_and_init_base_block(0, EScopeKind::SCOPEKIND_GLOBAL_PACKAGE, 0, pTCContext);
+                pTCContext->pCurrentBlock = tc_alloc_and_init_base_block(0, ECTXKIND_GLOBAL_PACKAGE, 0, pTCContext);
             else { // otherwise NOOP for typechecking this file
                 platform_log_info("Empty file, done...", true);
                 TRACE_EXIT(ELOCPHASE_TC_MGR, _LLVL2_IMPORTANT_INFO, pTCContext->pWorker);
@@ -1146,12 +1157,12 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
 
         } else { Assert_(pTCContext->pCompoundToTC); // Structs, Unions, Enums, 
             Assert_(pTCContext->eKind == ETypecheckContextKind::ECTXKIND_COMPOUND);
-            Assert_(pTCContext->eBlockKind == ETypecheckBlockKind::EBLOCKKIND_DECL);
+            Assert_(pTCContext->eBlockKind == ETypecheckBlockKind::EBLOCKKIND_BASE);
             Assert_(pTCContext->pIsolatedSourceFile->iBlockCount > 0 && pTCContext->pIsolatedSourceFile->tBlocks->uStatementCount > 0);
             Assert_(pTCContext->pProcSource == 0);
             Assert_(pTCContext->pProcResult == 0);
             u32 uBlockIndex = u32(reinterpret_cast<u64>(pTCContext->pCompoundToTC->pRootTcBlock) >> 2);
-            TCDeclSourceBlock* pRootTCBlock = tc_alloc_and_init_seq_block(uBlockIndex, 0, 0u, pTCContext);
+            TCBaseSourceBlock* pRootTCBlock = tc_alloc_and_init_base_block(uBlockIndex, ECTXKIND_COMPOUND, 0u, pTCContext);
 
             TRACE_ENTER(ELOCPHASE_TC_MGR, _LLVL2_IMPORTANT_INFO, EventTCMG_TC_COMPOUND(pTCContext, false), pTCContext->pWorker);
 

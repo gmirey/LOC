@@ -1667,8 +1667,9 @@ declare_expr_parsing_fn(ternary_if)
     platform_log_info("> ternary-if expression", true);
 #endif
     // TODO
-    Assert(false, "not yet implemented");
-    return 0;
+    PreAstNode* pResult;
+    make_err_pre_node_other(pResult, FERR_NOT_YET_IMPLEMENTED, "ternary_if not yet implemented");
+    return pResult;
 }
 
 local_func_inl PreAstNode* _try_parse_proc_params_out(ParserParams& parserParams, u16 uDepthGuard, u16* outError) 
@@ -1845,8 +1846,9 @@ declare_expr_parsing_fn(set_decl)
     platform_log_info("> set-type expression", true);
 #endif
     // TODO
-    Assert(false, "not yet implemented");
-    return 0;
+    PreAstNode* pResult;
+    make_err_pre_node_other(pResult, FERR_NOT_YET_IMPLEMENTED, "set_decl not yet implemented");
+    return pResult;
 }
 
 local_func PreAstNode* try_parse_atomic_expression(ParserParams& parserParams,
@@ -2195,8 +2197,9 @@ declare_unary_parsing_fn(map_decl)
     platform_log_info("> pseudo-unary-op : map-decl syntax (hopefully prefixing its value type)", true);
 #endif
     // TODO
-    Assert(false, "not yet implemented");
-    return 0;
+    PreAstNode* pResult;
+    make_err_pre_node_other(pResult, FERR_NOT_YET_IMPLEMENTED, "map_decl not yet implemented");
+    return pResult;
 }
 
 // ParserParams& parserParams, PreAstNode* pLHSExpr, u16 uDepthGuard, u16* outError -> PreAstNode*
@@ -2716,7 +2719,7 @@ declare_statement_parsing_fn(st_for)
     platform_log_info("> special 'for' statement", true);
 #endif
     // TODO
-    Assert(false, "not yet implemented");
+    make_err_pre_node_other(pStatement->pMainNode, FERR_NOT_YET_IMPLEMENTED, "st_for not yet implemented");
 }
 
 // PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
@@ -2727,7 +2730,7 @@ declare_statement_parsing_fn(loop_finalizer)
     platform_log_info("> statement of the form 'loop-finalizer'", true);
 #endif
     // TODO
-    Assert(false, "not yet implemented");
+    make_err_pre_node_other(pStatement->pMainNode, FERR_NOT_YET_IMPLEMENTED, "loop_finalizer not yet implemented");
 }
 
 // PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
@@ -2738,7 +2741,7 @@ declare_statement_parsing_fn(st_case)
     platform_log_info("> special 'case' statement", true);
 #endif
     // TODO
-    Assert(false, "not yet implemented");
+    make_err_pre_node_other(pStatement->pMainNode, FERR_NOT_YET_IMPLEMENTED, "st_case not yet implemented");
 }
 
 // PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
@@ -2762,7 +2765,7 @@ declare_statement_parsing_fn(special_token)
         if (is_explicit_linebreak(pCurrent))
             pCurrent = starting_true_eat_lines_while_eol_or_forced_break(parserParams, outError);
         if (*outError) {
-            make_err_pre_node_during_multiline(pStatement->pMainNode, "After else or defer keyword");
+            make_err_pre_node_during_multiline(pStatement->pMainNode, "After noop or unreach keyword");
             return;
         }
     }
@@ -2792,7 +2795,7 @@ declare_statement_parsing_fn(st_return)
         PreAstNode* pListToReturn = try_parse_expression_or_list(parserParams, true, true, 0, uDepthGuard, outError);
         pStatement->pMainNode = pListToReturn; // can be null, but empty return is okay
     } else {
-        // NOOP: empty return is okay
+        // NOOP: empty return is okay as far as parser is concerned
     }
 }
 
@@ -2801,21 +2804,17 @@ declare_statement_parsing_fn(st_opt_expr)
 {
 #if TRACE_PRE_PARSER_PRINTLEVEL > 2
     debug_print_indent(uDepthGuard*2 + 1);
-    platform_log_info("> statement of the form 'single-token-with-optional-expr'", true);
+    platform_log_info("> statement of the form 'single-token-with-optional-expr' : break, or continue", true);
 #endif
-    // TODO
-    Assert(false, "not yet implemented");
-}
-
-// PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
-declare_statement_parsing_fn(special_using)
-{
-#if TRACE_PRE_PARSER_PRINTLEVEL > 2
-    debug_print_indent(uDepthGuard*2 + 1);
-    platform_log_info("> statement of the form 'special-using'", true);
-#endif
-    pStatement->uStatementKind = ESTATEMENT_USING;
     Token* pCurrent = parserParams.parserState.pCurrentToken;
+    Assert_(pCurrent < parserParams.parserState.pLineTokenEnd);
+    u8 uStatementKind = ESTATEMENT_BREAK;
+    if (u8(pCurrent->uTokenPayloadAndKind >> 8) == ETOK_CONTINUE) {
+        uStatementKind = ESTATEMENT_CONTINUE;
+    } else {
+        Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == ETOK_BREAK);
+    }
+    pStatement->uStatementKind = uStatementKind;
     reference_current_token_as(key);
     pStatement->pivotToken1 = key;
     pStatement->uExpectedNextBlockSpawning = EBLOCK_SPAWNING_NONE;
@@ -2824,13 +2823,44 @@ declare_statement_parsing_fn(special_using)
         if (is_explicit_linebreak(pCurrent))
             pCurrent = starting_true_eat_lines_while_eol_or_forced_break(parserParams, outError);
         if (*outError) {
-            make_err_pre_node_during_multiline(pStatement->pMainNode, "After using keyword");
+            make_err_pre_node_during_multiline(pStatement->pMainNode, "After break or continue keyword");
+            return;
+        }
+        PreAstNode* pListToReturn = try_parse_expression_or_list(parserParams, true, true, 0, uDepthGuard, outError);
+        pStatement->pMainNode = pListToReturn; // can be null, but empty return is okay
+    } else {
+        // NOOP: empty break or continue is okay
+    }
+}
+
+// PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
+declare_statement_parsing_fn(special_using)
+{
+#if TRACE_PRE_PARSER_PRINTLEVEL > 2
+    debug_print_indent(uDepthGuard*2 + 1);
+    platform_log_info("> statement of the form 'special-using/including'", true);
+#endif
+    pStatement->uStatementKind = ESTATEMENT_USING;
+    Token* pCurrent = parserParams.parserState.pCurrentToken;
+    Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_USING || u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_INCLUDING);
+    reference_current_token_as(key);
+    pStatement->pivotToken1 = key;
+    pStatement->uExpectedNextBlockSpawning = EBLOCK_SPAWNING_NONE;
+    pCurrent = ++parserParams.parserState.pCurrentToken;
+    if (pCurrent < parserParams.parserState.pLineTokenEnd) {
+        if (is_explicit_linebreak(pCurrent))
+            pCurrent = starting_true_eat_lines_while_eol_or_forced_break(parserParams, outError);
+        if (*outError) {
+            make_err_pre_node_during_multiline(pStatement->pMainNode, "After 'using' or 'including' keyword");
             return;
         }
     }
     PreAstNode* pWhatToUse = try_parse_expression_or_list(parserParams, true, true, 0, uDepthGuard, outError);
     if (!pWhatToUse) {
-        make_err_pre_node_expected_vs_found(pWhatToUse, 0, "expected expression or list after 'using'");
+        make_err_pre_node_expected_vs_found(pWhatToUse, 0, "expected expression or list after 'using' or 'including'");
+    } else {
+        if (pWhatToUse->uNodeKind == ENODE_EXPR_OTHER_DEF)
+            pStatement->uExpectedNextBlockSpawning = EBLOCK_SPAWNING_EXPECTED;
     }
     pStatement->pMainNode = pWhatToUse;
 }
@@ -3182,7 +3212,7 @@ local_func PreStatement* parse_pre_statement(ParserParams& parserParams, u16 uDe
                     }
                 }
             }
-        } else {
+        } else { // single expression
             if (pStartingExpression->uNodeKind == ENODE_EXPR_PROCLIKE_DEF || 
                 pStartingExpression->uNodeKind == ENODE_EXPR_OTHER_DEF)
             {

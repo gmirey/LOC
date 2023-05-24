@@ -742,12 +742,12 @@ local_func void on_global_tc_task_ended_return_once_locked_task_manager(TCContex
     }
 
     bool bUpdateUsing = false;
-    if (pTCContext->pNamespace->vecUsedNamespaces.size() != pTCContext->pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size()) {
-        Assert_(pTCContext->pNamespace->vecUsedNamespaces.size() > pTCContext->pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
+    if (pTCContext->pNamespace->vecAccessibleUsedNamespaces.size() != pTCContext->pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size()) {
+        Assert_(pTCContext->pNamespace->vecAccessibleUsedNamespaces.size() > pTCContext->pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
         bUpdateUsing = true;
     }
-    if (pTCContext->pNamespace->vecUsedEnums.size() != pTCContext->pNamespace->asRef.laggedState.vecKnownUsedEnums.size()) {
-        Assert_(pTCContext->pNamespace->vecUsedEnums.size() > pTCContext->pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
+    if (pTCContext->pNamespace->vecAccessibleUsedEnums.size() != pTCContext->pNamespace->asRef.laggedState.vecKnownUsedEnums.size()) {
+        Assert_(pTCContext->pNamespace->vecAccessibleUsedEnums.size() > pTCContext->pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
         bUpdateUsing = true;
     }
     bool bUpdateUsedBy = false;

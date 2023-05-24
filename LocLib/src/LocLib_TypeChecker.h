@@ -25,6 +25,8 @@
 #include "LocLib_IR_SolverInterface.h"
 #include "LocLib_TC_StdOpsEval.h"
 #include "LocLib_TC_Branching.h"
+#include "LocLib_TC_Binding.h"
+#include "LocLib_TC_AdvancedDeclarations.h"
 #include "LocLib_Type_Registration.h"
 #include "LocLib_TC_TypeCtors.h"
 #include "LocLib_TC_Indexing.h"
@@ -50,7 +52,7 @@ local_func void emit_proc_intro(TCProcBodyResult* pProcBody, CompilationContext*
             // TODO: default values for retparams ?
         }
     } else {
-        // emitting single noop as first IR, so that we always have a 0 which is not a valid jump target...
+        // emitting single noop as first IR in case of no-param, so that we always have an IR pos 0 which is not a valid jump target...
         ir_emit_entry(&(pProcBody->procwiseRepo), IRIT_NO_OP, 0u, 0u, 0uLL, 0uLL, 0u, MetaValueIR{}, pEvalContext->pWorker);
     }
 }
@@ -336,12 +338,6 @@ local_func ETCResult typecheck_cmp_binary_op(TmpTCNode* pExpr, u8 uOp, TCStateme
         "typecheck_cmp_binary_op() : not yet implemented");
 }
 
-// predecl
-/*
-ValueBinding* tc_find_binding_from_identifier_within_namespace(TCNamespace* pNamespace,
-    TCContext* pTCContext, int iIdentifierHandle, u64 uHash, EIdentAttributes eAttr);
-*/
-
 struct ReadNamespaceLaggedStateLockHelperWithAutoRelease {
 
     ReadNamespaceLaggedStateLockHelperWithAutoRelease(CompilationContext* pContext):_pSourceFile(0), _pContext(pContext) {}
@@ -367,178 +363,6 @@ struct ReadNamespaceLaggedStateLockHelperWithAutoRelease {
     SourceFileDescAndState* _pSourceFile;
     CompilationContext* _pContext;
 };
-
-local_func ValueBinding* tc_find_binding_from_identifier_within_namespace(ReferencedNamespace* pRefNamespace,
-    TCContext* pTCContext, int iIdentifierHandle, u64 uHash, EIdentAttributes eAttr, bool* optKnownFullyDiscoveredStartTrue = 0)
-{
-    bool bIsLocalNamespace = (pRefNamespace->pOrigNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile);
-
-    ReadNamespaceLaggedStateLockHelperWithAutoRelease lockHelperWithAutoRelease(pTCContext);
-    if (!bIsLocalNamespace) {
-        lockHelperWithAutoRelease.acquire_read_lock(pRefNamespace->pOrigNamespace->pOriginalSourceFile);
-    }
-
-    TmpMap<int, u32>& mapGlobals = bIsLocalNamespace ?
-        pRefNamespace->pOrigNamespace->mapAllGlobalDeclarationsById :
-        pRefNamespace->laggedState.mapKnownAccessibleDeclarationsById; // TODO: some with less-than-package access ??
-
-    auto itFoundWithinGlobals = mapGlobals.findHashed(uHash, iIdentifierHandle);
-    if (itFoundWithinGlobals != mapGlobals.end()) {
-        u32 uIndex = itFoundWithinGlobals.value();
-        return pRefNamespace->pOrigNamespace->pOriginalSourceFile->vecAllGlobalBindings[uIndex];
-    }
-
-    TmpArray<const TypeInfo_Enum*>& vecEnums = bIsLocalNamespace ?
-        pRefNamespace->pOrigNamespace->vecUsedEnums :
-        pRefNamespace->laggedState.vecKnownUsedEnums;
-    u32 uUsedEnums = vecEnums.size();
-    for (u32 uEnum = 0u; uEnum < uUsedEnums; uEnum++) {
-        const TypeInfo_Enum* pEnum = vecEnums[uEnum];
-        // TODO !!!
-    }
-
-    TmpArray<ReferencedNamespace*>& vecOtherUsed = bIsLocalNamespace ?
-        pRefNamespace->pOrigNamespace->vecUsedNamespaces :
-        pRefNamespace->laggedState.vecKnownUsedNamespaces;
-    u32 uUsedNamespaces = vecOtherUsed.size();
-    for (u32 uOther = 0u; uOther < uUsedNamespaces; uOther++) {
-        ReferencedNamespace* pOther = vecOtherUsed[uOther];
-        ValueBinding* pFoundThere = tc_find_binding_from_identifier_within_namespace(pOther,
-            pTCContext, iIdentifierHandle, uHash, eAttr, optKnownFullyDiscoveredStartTrue);
-        if (pFoundThere)
-            return pFoundThere;
-    }
-
-    if (optKnownFullyDiscoveredStartTrue) {
-        if (bIsLocalNamespace) {
-            if (pRefNamespace->pOrigNamespace->eCompState < ESOURCE_COMP_STATE_DONE_LOCAL_DISCOVERY)
-                *optKnownFullyDiscoveredStartTrue = false;
-        } else {
-            if (pRefNamespace->laggedState.uDiscoveryProgress < ESOURCE_COMP_STATE_DONE_LOCAL_DISCOVERY)
-                *optKnownFullyDiscoveredStartTrue = false;
-        }
-    }
-
-    return 0;
-}
-
-local_func ValueBinding* tc_find_binding_within_used_enum(const TypeInfo_Enum* pTheEnum,
-    TCContext* pTCContext, int iIdentifierHandle, u64 uHash)
-{
-    auto itFoundWithin = pTheEnum->mapAllMembers.findHashed(uHash, iIdentifierHandle);
-    if (itFoundWithin != pTheEnum->mapAllMembers.end()) {
-        u32 uIndex = itFoundWithin.value();
-        return pTheEnum->vecAllMembers[uIndex];
-    }
-    u32 uNumUsed = pTheEnum->vecUsed.size();
-    for (u32 uUsed = 0u; uUsed < uNumUsed; uUsed++) {
-        const TypeInfo_Enum* pUsedEnum = pTheEnum->vecUsed[uUsed];
-        ValueBinding* pFoundThere = tc_find_binding_within_used_enum(pUsedEnum, pTCContext, iIdentifierHandle, uHash);
-        if (pFoundThere)
-            return pFoundThere;
-    }
-    return 0;
-}
-
-local_func ValueBinding* tc_try_find_binding_within_included_structlike(const TypeInfo_StructLike* pTheStructLike,
-    TCContext* pTCContext, int iIdentifierHandle, u64 uHash)
-{
-    if (is_compound_type_full_typechecked(pTheStructLike)) {
-        auto itFoundWithin = pTheStructLike->mapAllMembers.findHashed(uHash, iIdentifierHandle);
-        if (itFoundWithin != pTheStructLike->mapAllMembers.end()) {
-            u32 uIndex = itFoundWithin.value();
-            return pTheStructLike->vecAllMembers[uIndex];
-        }
-        u32 uNumIncluded = pTheStructLike->vecIncluded.size();
-        for (u32 uIncluded = 0u; uIncluded < uNumIncluded; uIncluded++) {
-            const TypeInfo_StructLike* pIncludedStructLike = pTheStructLike->vecIncluded[uIncluded];
-            ValueBinding* pFoundThere = tc_try_find_binding_within_included_structlike(pIncludedStructLike, pTCContext, iIdentifierHandle, uHash);
-            if (pFoundThere)
-                return pFoundThere;
-        }
-    }
-    return 0;
-}
-
-local_func ValueBinding* tc_find_binding_from_identifier(TCContext* pTCContext, int iIdentifierHandle, EIdentAttributes eAttr)
-{
-    u64 uHash = get_map_hash(iIdentifierHandle);
-
-    // TODO: special proc-sign context for when typechecking proc sign: allow referencing already seen ids here.
-    
-    if (is_ctx_compound(pTCContext)) {
-        Assert_(pTCContext->pCompoundToTC);
-        if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM) {
-            TypeInfo_Enum* pAsEnum = (TypeInfo_Enum*)pTCContext->pCompoundToTC->pCompoundType;
-            auto itFoundWithin = pAsEnum->mapAllMembers.findHashed(uHash, iIdentifierHandle);
-            if (itFoundWithin != pAsEnum->mapAllMembers.end()) {
-                u32 uIndex = itFoundWithin.value();
-                return pAsEnum->vecAllMembers[uIndex];
-            }
-            u32 uNumUsed = pAsEnum->vecUsed.size();
-            for (u32 uUsed = 0u; uUsed < uNumUsed; uUsed++) {
-                const TypeInfo_Enum* pUsedEnum = pAsEnum->vecUsed[uUsed];
-                ValueBinding* pFoundThere = tc_find_binding_within_used_enum(pUsedEnum, pTCContext, iIdentifierHandle, uHash);
-                if (pFoundThere)
-                    return pFoundThere;
-            }
-
-        } else { Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE);
-            TypeInfo_StructLike* pAsStructLike = (TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType;
-            auto itFoundWithin = pAsStructLike->mapAllMembers.findHashed(uHash, iIdentifierHandle);
-            if (itFoundWithin != pAsStructLike->mapAllMembers.end()) {
-                u32 uIndex = itFoundWithin.value();
-                return pAsStructLike->vecAllMembers[uIndex];
-            }
-            u32 uNumIncluded = pAsStructLike->vecIncluded.size();
-            for (u32 uIncluded = 0u; uIncluded < uNumIncluded; uIncluded++) {
-                const TypeInfo_StructLike* pIncludedStructLike = pAsStructLike->vecIncluded[uIncluded];
-                ValueBinding* pFoundThere = tc_try_find_binding_within_included_structlike(pIncludedStructLike, pTCContext, iIdentifierHandle, uHash);
-                if (pFoundThere)
-                    return pFoundThere;
-            }
-        }
-
-    } else if (does_tc_ctx_resolve_identifiers_locally(pTCContext, eAttr)) {
-        Assert_(has_ctx_decl_blocks(pTCContext));
-        TCDeclSourceBlock* pCurrentBlock = (TCDeclSourceBlock*)pTCContext->pCurrentBlock;
-        do {
-            TmpMap<int, u32>* pMapLocalDeclsById = pCurrentBlock->pMapBlockDeclarationsById;
-            auto itFoundLocal = pMapLocalDeclsById->findHashed(uHash, iIdentifierHandle);
-            if (itFoundLocal != pMapLocalDeclsById->end()) {
-                u32 uIndex = itFoundLocal.value();
-                return (*get_tc_ctx_local_resolution_registry(pTCContext, eAttr))[uIndex];
-            }
-            pCurrentBlock = (TCDeclSourceBlock*)pCurrentBlock->pParentBlock;
-        } while (pCurrentBlock);
-    }
-
-    // TODO: CLEANUP: is recurs until no parent tc block the correct separation before checking proc-source params ???
-
-    if (is_ctx_with_proc_source(pTCContext)) {
-        const TypeInfo_ProcLike* pProcSign = pTCContext->pProcSource->procSign;
-        u8 uTotalCount = get_total_param_count(pProcSign);
-        for (u8 uParam = 0; uParam < uTotalCount; uParam++) {
-            const ProcLikeParam* pParam = pProcSign->params.cat(uParam);
-            if (iIdentifierHandle == pParam->iIdentifier)
-                return pParam->pBinding;
-        }
-    }
-
-    // TODO: unhygienic punch-throughs to a parent-context ?
-
-    Assert_(pTCContext->pNamespace);
-    TCNamespace* pNamespace = pTCContext->pNamespace;
-    while (pNamespace) {
-        ValueBinding* pBindingFoundInNamespace = tc_find_binding_from_identifier_within_namespace((ReferencedNamespace*)pNamespace,
-            pTCContext, iIdentifierHandle, uHash, eAttr);
-        if (pBindingFoundInNamespace)
-            return pBindingFoundInNamespace;
-        pNamespace = pNamespace->pParent;
-    }
-
-    return 0;
-}
 
 // At statement level, typechecks nodes of the op-and-assignment kind
 local_func ETCResult typecheck_op_and_assignment_statement(TmpTCNode* pMainNode, TCStatement* pTCStatement, TCContext* pTCContext)
@@ -622,257 +446,6 @@ local_func ETCResult typecheck_op_and_assignment_statement(TmpTCNode* pMainNode,
         pMainNode->pIntrinsicValue->info.uIRandMetaFlags & IR_STD_PARAM_MASK, get_ir_format(destAndOpA.pIntrinsicValue->pType),
         get_slots_count(destAndOpA.pIntrinsicValue->pType), pTCStatement, pTCContext);
     return set_node_typecheck_expr_success(pMainNode->pTCNode);
-}
-
-
-local_func ETCResult add_proclike_param_to(TmpArray<ProcLikeParam>* ioVecParams,
-    int iIdentifierHandle, const TypeInfo* pExplicitType, u32 uOptDefaultValueNodeIndex,
-    TmpTCNode* pParam, TCStatement* pTCStatement, TCContext* pTCContext)
-{
-    u32 uPosInIR = ioVecParams->size();
-    if (uPosInIR >= 31) {
-        return_error(pParam, pTCStatement, pTCContext, CERR_TOO_MANY_PROC_PARAMETERS,
-            "add_proclike_param_to() : proc parameters count (in+out) has a hard maximum of 31");
-    }
-
-    ProcLikeParam param;
-    param.iIdentifier = iIdentifierHandle;
-    param.uOptDefaultValueNodeIndex = uOptDefaultValueNodeIndex;
-    param.pBinding = (ValueBinding*)alloc_from(pTCContext->pIsolatedSourceFile->localArena,
-        sizeof(ValueBinding), alignof(ValueBinding));
-    set_binding_source_ref(param.pBinding, pTCStatement, pTCContext, EDeclAttributes::EDECLATTR_REGULAR_VAR);
-    param.pBinding->iIdentifierHandle = iIdentifierHandle;
-    param.pBinding->uScopeAndLocation = EScopeKind::SCOPEKIND_PROC_PARAM | (uPosInIR << 8);
-    param.pBinding->info.uIRandMetaFlags = ir_make_std_code_in_cur_proc(uPosInIR);
-    param.pBinding->info.metaValue._payload = 0uLL;
-
-    if (uOptDefaultValueNodeIndex != INVALID_NODE_INDEX) {
-        // TODO
-        return_error(pParam, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-            "add_proclike_param_to() : default values not yet implemented");
-    }
-
-    if (pExplicitType) {
-        u16 uErrIfFalse = 0;
-        // TODO: support for parametric types
-        Assert_(is_allowed_as_runtime_type(pExplicitType, pTCContext, &uErrIfFalse));
-        param.pBinding->pType = pExplicitType;
-        Assert_(get_type_kind(pExplicitType) < COUNT_TYPE_KINDS);
-        ioVecParams->append(param);
-        return set_node_type_cast_expr_success(pParam->pTCNode); // marker for bound
-    } else {
-        Assert_(uOptDefaultValueNodeIndex != INVALID_NODE_INDEX);
-        // TODO: how to handle type inferrence if default-value can be runtime and would have to be typechecked with IR emission
-        //   at the start of proc-body resolution ?
-        return_error(pParam, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-            "add_proclike_param_to() : param with type inferrence from default value not yet implemented");
-    }
-}
-
-local_func int get_id_from_decl_node(TmpTCNode* pDecl, TCStatement* pTCStatement) {
-    Assert_(is_node_already_typechecked(pDecl->pTCNode));
-    Assert_(pDecl->pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_ASTNODE]);
-    Assert_(is_value_tc_only(pDecl->pIntrinsicValue));
-    u32 uReferredToNodeIndex = u32(pDecl->pIntrinsicValue->info.metaValue.knownValue.uEmbeddedValue);
-    TCNode* pNodeThere = pTCStatement->vecNodes[uReferredToNodeIndex];
-    Assert_(u8(pNodeThere->ast.uNodeKindAndFlags) == ENodeKind::ENODE_ATOMICEXPR_IDENTIFIER);
-    int iIdentifierHandle = int(pNodeThere->ast.uPrimaryPayload);
-    Assert_(iIdentifierHandle != ERES_INVALID_ID);
-    Assert_(iIdentifierHandle >= COUNT_RESERVED_WORDS);
-    return iIdentifierHandle;
-}
-
-local_func ETCResult typecheck_macro_or_paramdecl_to(TmpArray<ProcLikeParam>* ioVecParams, TmpTCNode* pParam,
-    TCStatement* pTCStatement, TCContext* pTCContext, u32 uIndexOfOptNodeChainParent, bool* outWasMacroExpansion)
-{
-    *outWasMacroExpansion = false;
-    u8 uNodeKind = u8(pParam->pTCNode->ast.uNodeKindAndFlags);
-    Assert_(uNodeKind != ENodeKind::ENODE_EXPRLIST_NODE); // the caller should be discriminating against list-nodes already
-
-    if (uNodeKind == ENodeKind::ENODE_EXPR_INVOCATION_FORM) {
-        Assert_(u8(pParam->pTCNode->ast.uNodeKindAndFlags >> 8) == ETOK_INVOCATION);
-        // proc invocations are to be treated separately, since they could very well be macros and require expansion...
-        // furthermore, they may expand to multiple elements in a list on the right or left side of some statements.
-        ETCResult checkInvoc = typecheck_invocation_form(pParam, pTCStatement,
-            pTCContext, EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{},
-            uIndexOfOptNodeChainParent, 0, 0, EInvocFormResultCount::EINVOC_RETURNS_ONE,
-            outWasMacroExpansion);
-        if (checkInvoc != ETCResult::ETCR_SUCCESS || *outWasMacroExpansion)
-            return checkInvoc;
-        goto on_typeckecked_as_constant_expression;
-
-    } else if (uNodeKind == ENodeKind::ENODE_VARIABLE_DECL) {
-
-        // TODO: support for parametric variables (ie static values)
-        TmpTCNode varDecl = init_tmp_tc_node(pParam->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
-        ETCResult checkDecl = typecheck_expression(&varDecl, pTCStatement, pTCContext,
-            EExpectedExpr::EXPECT_DECLARABLE, UpwardsInference{});
-        success_or_return_wait_or_error(checkDecl, pParam->pTCNode);
-
-        TmpTCNode typeOrTypeAndInit = init_tmp_tc_node(pParam->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
-        TmpTCNode tmp;
-        TmpTCNode* pTypeNode = &typeOrTypeAndInit;
-        u32 uOptDefaultValueNodeIndex = INVALID_NODE_INDEX;
-        if (u8(typeOrTypeAndInit.pTCNode->ast.uNodeKindAndFlags) == ENodeKind::ENODE_EXPR_SINGLE_EQ) {
-            if (pParam->pTCNode->ast.uPrimaryChildNodeIndex != INVALID_NODE_INDEX) {
-                tmp = init_tmp_tc_node(pParam->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
-                pTypeNode = &tmp;
-            } else
-                pTypeNode = 0;
-            uOptDefaultValueNodeIndex = typeOrTypeAndInit.pTCNode->ast.uSecondaryChildNodeIndex;
-        }
-
-        const TypeInfo* pExplicitType = 0;
-        if (pTypeNode) {
-            // TODO: support for parametric types
-            ETCResult checkType = typecheck_expression(pTypeNode, pTCStatement, pTCContext,
-                EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{});
-            success_or_return_wait_or_error(checkType, pParam->pTCNode);
-            Assert_(is_node_already_typechecked(pTypeNode->pTCNode));
-            Assert_(is_value_tc_const(pTypeNode->pIntrinsicValue));
-            if (pTypeNode->pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
-                Assert_(is_value_tc_only(pTypeNode->pIntrinsicValue));
-                pExplicitType = type_from_type_node(pTypeNode->pIntrinsicValue);
-                Assert_(get_type_kind(pExplicitType) < COUNT_TYPE_KINDS);
-                check_type_availability_may_return_wait_or_error(pExplicitType, pParam, pTCStatement, pTCContext, "Cannot typecheck a proc signature with");
-                u16 uTypeErr = 0;
-                if (!is_allowed_as_runtime_type(pExplicitType, pTCContext, &uTypeErr)) {
-                    // TODO: support for parametric types
-                    return_error(pTypeNode, pTCStatement, pTCContext, uTypeErr,
-                        "typecheck_macro_or_paramdecl_to() : unallowed type in explicit type-slot for a proc param");
-                }
-            } else {
-                return_error(pParam, pTCStatement, pTCContext, CERR_EXPECTED_TYPE,
-                    "typecheck_macro_or_paramdecl_to() : non-vardecl expression in proc declaration should be a type");
-            }
-        }
-
-        int iIdentifierHandle = get_id_from_decl_node(&varDecl, pTCStatement);
-        return add_proclike_param_to(ioVecParams, iIdentifierHandle, pExplicitType, uOptDefaultValueNodeIndex, pParam, pTCStatement, pTCContext);
-
-    } else {
-        ETCResult checkExpr = typecheck_any_non_invoc_expression(pParam, uNodeKind, pTCStatement,
-            pTCContext, EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{});
-        if (checkExpr != ETCResult::ETCR_SUCCESS)
-            return checkExpr;
-        goto on_typeckecked_as_constant_expression;
-    }
-
-    on_typeckecked_as_constant_expression:
-    Assert_(is_node_already_typechecked(pParam->pTCNode));
-    Assert_(is_value_tc_const(pParam->pIntrinsicValue));
-
-    if (pParam->pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
-        Assert_(is_value_tc_only(pParam->pIntrinsicValue));
-        const TypeInfo* pExplicitType = type_from_type_node(pParam->pIntrinsicValue);
-        Assert_(get_type_kind(pExplicitType) < COUNT_TYPE_KINDS);
-        check_type_availability_may_return_wait_or_error(pExplicitType, pParam, pTCStatement, pTCContext, "Cannot typecheck a proc signature with");
-        u16 uTypeErr = 0;
-        if (!is_allowed_as_runtime_type(pExplicitType, pTCContext, &uTypeErr)) {
-            // TODO: support for parametric types
-            return_error(pParam, pTCStatement, pTCContext, uTypeErr,
-                "typecheck_macro_or_paramdecl_to() : unallowed type for proc param");
-        }
-        return add_proclike_param_to(ioVecParams, ERES_INVALID_ID, pExplicitType, INVALID_NODE_INDEX, pParam, pTCStatement, pTCContext);
-    } else {
-        return_error(pParam, pTCStatement, pTCContext, CERR_EXPECTED_TYPE,
-            "typecheck_macro_or_paramdecl_to() : non-vardecl expression in proc declaration should be a type");
-    }
-
-}
-
-local_func ETCResult typecheck_all_param_decls_to(TmpArray<ProcLikeParam>* ioVecParams, u32 uStartingNodeIndex,
-    TCStatement* pTCStatement, TCContext* pTCContext)
-{
-    u32 uCurrentNodeIndex = uStartingNodeIndex;
-
-when_macro_start_again:
-    {
-        bool bWasMacroExpansion = false;
-        TCNode* pCurrentNode = pTCStatement->vecNodes[uCurrentNodeIndex];
-        while (u8(pCurrentNode->ast.uNodeKindAndFlags) == ENodeKind::ENODE_EXPRLIST_NODE) {
-            u32 uNextNodeIndex = pCurrentNode->ast.uSecondaryChildNodeIndex;
-
-            u32 uChildNodeIndex = pCurrentNode->ast.uPrimaryChildNodeIndex;
-
-            Assert_(uChildNodeIndex != INVALID_NODE_INDEX);
-            TmpTCNode child = init_tmp_tc_node(uChildNodeIndex, pTCStatement, pTCContext);
-            Assert_(u8(child.pTCNode->ast.uNodeKindAndFlags) != ENodeKind::ENODE_EXPRLIST_NODE);
-
-            ETCResult checkChild = typecheck_macro_or_paramdecl_to(ioVecParams, &child, pTCStatement, pTCContext,
-                uCurrentNodeIndex, &bWasMacroExpansion);
-            if (checkChild == ETCResult::ETCR_SUCCESS) {
-                if (bWasMacroExpansion) {
-                    goto when_macro_start_again;
-                }
-                // otherwise NOOP
-            } else
-                return checkChild;
-
-            if (uNextNodeIndex != INVALID_NODE_INDEX) {
-                uCurrentNodeIndex = uNextNodeIndex;
-                pCurrentNode = pTCStatement->vecNodes[uCurrentNodeIndex];
-            }
-        }
-
-        Assert_(pCurrentNode);
-        Assert_(u8(pCurrentNode->ast.uNodeKindAndFlags) != ENodeKind::ENODE_EXPRLIST_NODE);
-        TmpTCNode last = init_tmp_tc_node(uCurrentNodeIndex, pTCStatement, pTCContext);
-
-        ETCResult checkLast = typecheck_macro_or_paramdecl_to(ioVecParams, &last, pTCStatement, pTCContext,
-            uCurrentNodeIndex, &bWasMacroExpansion);
-        if (checkLast == ETCResult::ETCR_SUCCESS && bWasMacroExpansion) {
-            goto when_macro_start_again;
-        }
-        return checkLast;
-    }
-}
-
-local_func ETCResult do_typecheck_as_proc_signature(TmpTCNode* pProcDecl, TCStatement* pTCStatement, TCContext* pTCContext,
-    TypeInfo_ProcLike* outProcSign)
-{
-    u8 uProcKindToken = u8(pProcDecl->pTCNode->ast.uNodeKindAndFlags >> 8);
-    Assert_(uProcKindToken >= ETOK_PROC);
-    u8 uProcKind = uProcKindToken - ETOK_PROC;
-    Assert_(uProcKind < 16u);
-
-    // TODO: setup a special binding for proc params and allow referencing among them as we go
-    // TODO: take care of resolutions to local vars if typechecking a proc signature locally to another function...
-
-    init_proc_like(outProcSign, uProcKind, pTCContext->pWorker->tmpArena);
-    TmpTCNode signBase = init_tmp_tc_node(pProcDecl->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
-
-    if (pProcDecl->pTCNode->ast.uSecondaryChildNodeIndex != INVALID_NODE_INDEX) {
-        TmpTCNode whereClause = init_tmp_tc_node(pProcDecl->pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
-        // TODO
-        return_error(pProcDecl, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-            "typecheck_proc_signature_ast() : where clause support not yet implemented");
-    }
-
-    Assert_(u8(signBase.pTCNode->ast.uNodeKindAndFlags) == ENODE_PROCPARAMS_WRAP_ALL);
-    TmpTCNode inParamsWrapper = init_tmp_tc_node(signBase.pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
-    Assert_(u8(inParamsWrapper.pTCNode->ast.uNodeKindAndFlags) == ENODE_PROCPARAMS_IN); // otherwise postparser should have complained
-
-    u32 uOptInParams = inParamsWrapper.pTCNode->ast.uPrimaryChildNodeIndex;
-    if (uOptInParams != INVALID_NODE_INDEX) { // optional: none if no params
-        ETCResult checkDecls = typecheck_all_param_decls_to(&(outProcSign->params), uOptInParams, pTCStatement, pTCContext);
-        success_or_return_wait_or_error(checkDecls, pProcDecl->pTCNode);
-    }
-    Assert_(outProcSign->params.size() < 256u);
-    u8 uCountInParams = u8(outProcSign->params.size());
-    set_proc_like_input_param_count(outProcSign, uCountInParams);
-
-    // TODO: check default counts and only trailing
-
-    if (signBase.pTCNode->ast.uSecondaryChildNodeIndex != INVALID_NODE_INDEX) { // out params node is optional
-        TmpTCNode outParamsWrapper = init_tmp_tc_node(signBase.pTCNode->ast.uSecondaryChildNodeIndex, pTCStatement, pTCContext);
-        Assert_(u8(outParamsWrapper.pTCNode->ast.uNodeKindAndFlags) == ENODE_PROCPARAMS_OUT); // otherwise postparser should have complained
-        u32 uOutParams = outParamsWrapper.pTCNode->ast.uPrimaryChildNodeIndex; // but once there, required non-empty
-        ETCResult checkDecls = typecheck_all_param_decls_to(&(outProcSign->params), uOutParams, pTCStatement, pTCContext);
-        success_or_return_wait_or_error(checkDecls, pProcDecl->pTCNode);
-    }
-
-    return set_node_typecheck_expr_success(pProcDecl->pTCNode);
 }
 
 local_func ETCResult typecheck_regular_binary_op(TmpTCNode* pExpr, u8 uOp, TCStatement* pTCStatement,
@@ -1274,8 +847,7 @@ local_func ETCResult typecheck_dot_descent_expression_against_type(TmpTCNode* pE
             return_error(pExpr, pTCStatement, pTCContext, FERR_OTHER,
                 "typecheck_dot_descent_expression_against_type() : dot-descent against an enum type, which is in error");
         }
-        ValueBinding* pFoundBinding = tc_find_binding_within_used_enum(pAsEnum,
-            pTCContext, iRightHandIdentifier, get_map_hash(iRightHandIdentifier));
+        ValueBinding* pFoundBinding = find_binding_within_enum(iRightHandIdentifier, get_map_hash(iRightHandIdentifier), pAsEnum);
         if (pFoundBinding) {
             Assert_(is_value_tc_const(pFoundBinding));
             if (eExpectation == EExpectedExpr::EXPECT_ASSIGNABLE) {
@@ -1624,9 +1196,9 @@ local_func ETCResult typecheck_dot_descent_expression_against_namespace(TmpTCNod
         u64(pRefNamespace->pOrigNamespace->uRegistrationIndex),
         reinterpret_cast<u64>(pRefNamespace->pOrigNamespace->pOriginalSourceFile->sourceFileName.c_str())), pTCContext->pWorker);
 
-    bool bKnownFullyDiscovered = true; // must start true for the following call
-    ValueBinding* pBinding = tc_find_binding_from_identifier_within_namespace(pRefNamespace, pTCContext, iRightHandIdentifier,
-        get_map_hash(iRightHandIdentifier), EIdentAttributes::EIDENTATTR_REGULAR, &bKnownFullyDiscovered);
+    //bool bKnownFullyDiscovered = true; // must start true for the following call
+    ValueBinding* pBinding = find_binding_within_namespace(iRightHandIdentifier, get_map_hash(iRightHandIdentifier),
+        pRefNamespace, false, pTCContext); /* &bKnownFullyDiscovered was returned from previous implementation... */
 
     if (pBinding) {
         Assert_(u8(pBinding->uScopeAndLocation) <= EScopeKind::SCOPEKIND_GLOBAL_PACKAGE);
@@ -1648,7 +1220,7 @@ local_func ETCResult typecheck_dot_descent_expression_against_namespace(TmpTCNod
         set_existing_value_as(pBinding, pExpr, EValueSlotOnNode::ENODEVALUESLOT_INTRINSIC, pTCStatement);
         return set_node_typecheck_expr_success(pExpr->pTCNode);
 
-    } else if (!bKnownFullyDiscovered) {
+    } else /*if (!bKnownFullyDiscovered)*/ {
 
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
             "Putting TC task for statement on hold, waiting for global identifier '%s' resolution within namespace %u (in source file '%s')",
@@ -1668,10 +1240,10 @@ local_func ETCResult typecheck_dot_descent_expression_against_namespace(TmpTCNod
             return add_waiting_task_to(pSourceFile, waitingReason, pExpr->uNodeIndexInStatement, pNewWaitingContext);
         }
 
-    } else {
+    } /* else {
         return_error(pExpr, pTCStatement, pTCContext, RERR_UNRESOLVED_IDENTIFIER,
             "typecheck_dot_descent_expression_against_othersource() : unknown identifier in fully-discovered namespace");
-    }
+    } */
 }
 
 local_func ETCResult typecheck_dot_descent_expression(TmpTCNode* pExpr, TCStatement* pTCStatement,
@@ -2446,13 +2018,13 @@ local_func ETCResult typecheck_any_non_invoc_expression(TmpTCNode* pExpr, u8 uNo
 
 // bread-and-butter 'typecheck_expression' implementation for most cases (pre-declared in LocLib_TypeCheckerBase.h)
 local_func ETCResult typecheck_expression(TmpTCNode* pExpr, TCStatement* pTCStatement,
-    TCContext* pTCContext, EExpectedExpr eExpectation, UpwardsInference inferredFromBelow)
+    TCContext* pTCContext, EExpectedExpr eExpectation, UpwardsInference inferredFromBelow, bool bAllowUserTypeOrProcDecl)
 {
 restart_if_macro:
     {
         // we need to handle invoc-forms differently from the rest => start by discriminating against those
         //   before falling back to 'typecheck_any_non_invoc_expression' which will have the true 'big switch'
-        //   against node kind...
+        //   against node kind... proclike defs or compound type defs are also not usually allowed, unless explicitely stated as such here.
 
         u8 uNodeKind = u8(pExpr->pTCNode->ast.uNodeKindAndFlags);
         if (uNodeKind == ENodeKind::ENODE_EXPR_INVOCATION_FORM) {
@@ -2473,6 +2045,21 @@ restart_if_macro:
                 }
             }
             return checkInvoc;
+
+        } else if (uNodeKind == ENodeKind::ENODE_EXPR_PROCLIKE_DEF) {
+            if (bAllowUserTypeOrProcDecl) {
+                return typecheck_proc_declaration(pExpr, pTCStatement, pTCContext, eExpectation, inferredFromBelow);
+            } else {
+                return_error(pExpr, pTCStatement, pTCContext, CERR_PROCLIKE_DECL_FORM_OUTSIDE_SIGN_OR_CONST_DECLARATION_WITH_SINGLE_RHV,
+                    "typecheck_expression() : proclike decl form found outside of its possible contexts");
+            }
+        } else if (uNodeKind == ENodeKind::ENODE_EXPR_OTHER_DEF) {
+            if (bAllowUserTypeOrProcDecl) {
+                return typecheck_compound_declaration(pExpr, pTCStatement, pTCContext, eExpectation, inferredFromBelow);
+            } else {
+                return_error(pExpr, pTCStatement, pTCContext, CERR_COMPLEX_TYPE_DECL_FORM_OUTSIDE_CONST_DECLARATION_WITH_SINGLE_RHV,
+                    "typecheck_expression() : compound-type decl form found outside of its possible contexts");
+            }
         } else {
             return typecheck_any_non_invoc_expression(pExpr, uNodeKind, pTCStatement,
                 pTCContext, eExpectation, inferredFromBelow);
@@ -2503,107 +2090,7 @@ local_func ETCResult typecheck_expr_or_multi_invoc(TmpTCNode* pExpr, TCStatement
 
     } else if (uNodeKind == ENodeKind::ENODE_EXPR_PROCLIKE_DEF) {
         if (bAllowUserTypeOrProcDecl) {
-
-            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking a proclike definition"), pTCContext->pWorker);
-
-            Assert_(eExpectation == EExpectedExpr::EXPECT_CONSTANT);
-            TypeInfo_ProcLike resultingProcSign;
-            ArenaRefPoint beforeTCSign = get_arena_ref_point(pTCContext->pWorker->tmpArena);
-            ETCResult checkSign = do_typecheck_as_proc_signature(pExpr, pTCStatement, pTCContext, &resultingProcSign);
-            if (checkSign == ETCResult::ETCR_SUCCESS) {
-                if (!is_node_already_type_casted(pExpr->pTCNode)) { // marker for already recorded definition
-                    // TODO: check if overload. If not:
-                    // record a new proc body
-                    Arena localArena = pTCContext->pIsolatedSourceFile->localArena;
-                    TypeInfo_ProcLike* pProcSign = (TypeInfo_ProcLike*)alloc_from(localArena,
-                        sizeof(TypeInfo_ProcLike), alignof(TypeInfo_ProcLike));
-
-                    init_proc_like(pProcSign, get_proc_kind(&resultingProcSign), localArena);
-                    pProcSign->params.append_all(resultingProcSign.params);
-                    set_proc_like_input_param_count(pProcSign, get_input_param_count(&resultingProcSign));
-                    pProcSign->asNode.info.uIRandMetaFlags = declare_user_proc_sign_format(pProcSign, pTCContext);
-                    pProcSign->asNode.pType = g_pCoreTypesInfo[ECORETYPE_TYPE];
-                    pProcSign->asNode.info.metaValue.knownValue.pType = pProcSign;
-
-                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Registering ProcLike with %u in-params and %u out-params",
-                        u64(get_input_param_count(pProcSign)), u64(get_output_param_count(pProcSign))), pTCContext->pWorker);
-
-                    TCProcBodyRegistration* pRegistration = (TCProcBodyRegistration*)alloc_from(localArena,
-                        sizeof(TCProcBodyRegistration), alignof(TCProcBodyRegistration));
-                    pRegistration->procSource.procSign = pProcSign;
-                    // Note: pChildBlock at this point should be a 'tagged' ptr with block index in the source file's ast.
-                    pRegistration->procSource.pRootTcBlock = reinterpret_cast<TCSeqSourceBlock*>(pTCStatement->pChildBlock);
-                    FireAndForgetArenaAlloc localAlloc(localArena);
-                    pRegistration->procSource.vecStaticInParams.init(localAlloc);
-                    // CLEANUP: check if this 'deep-copy' of the statement is really needed here ???
-                    pRegistration->procSource.pStatementWithSignature = (TCStatement*)alloc_from(localArena,
-                        sizeof(TCStatement), alignof(TCStatement));
-                    *(pRegistration->procSource.pStatementWithSignature) = *pTCStatement;
-                    pRegistration->procSource.pStatementWithSignature->vecNodes.init(localAlloc);
-                    pRegistration->procSource.pStatementWithSignature->vecNodes.append_all(pTCStatement->vecNodes);
-                    pRegistration->procSource.pStatementWithSignature->vecNodeValues.init(localAlloc);
-                    pRegistration->procSource.pStatementWithSignature->vecNodeValues.append_all(pTCStatement->vecNodeValues);
-
-                    pRegistration->procResult.iPrimaryIdentifier = ERES_INVALID_ID; // will be assigned later at binding stage
-                    pRegistration->procResult.procSign = pProcSign;
-                    pRegistration->procResult.uProcBodyTypechekingStatus = 0; // TODO ?
-                    pRegistration->procResult.uRegistrationIndex = pTCContext->pIsolatedSourceFile->vecAllProcBodies.size();
-                    pTCContext->pIsolatedSourceFile->vecAllProcBodies.append(pRegistration);
-                    pRegistration->procResult.iSourceFileIndex = pTCContext->pIsolatedSourceFile->iRegistrationIndex;
-                    pRegistration->procResult.vecBindings.init(localAlloc);
-                    pRegistration->procResult.vecErrChecks.init(localAlloc);
-                    init_ir_repo(&(pRegistration->procResult.procwiseRepo), IR_REPO_ID_CURRENT_PROC, localArena);
-                    pRegistration->procResult.uIsForeignSource = 0uLL;
-                    pRegistration->procResult.foreignSymbolName = FFString { 0 };
-                    pRegistration->procResult.pGraphResult = 0;
-
-                    NodeValue* pProcDefValue = alloc_value_for(pExpr, EValueSlotOnNode::ENODEVALUESLOT_INTRINSIC, pTCStatement, pTCContext);
-                    pProcDefValue->pType = pProcSign;
-                    pProcDefValue->info.uIRandMetaFlags = IRFLAG_TC_SEMANTIC_CONST|IRFLAG_IS_KNOWN|IRFLAG_IS_KNOWN_EMBD|IRFLAG_HAS_NYKA;
-                    u64 uIRofProcBodyRef = ir_make_procbody_ref_in_file(u32(pTCContext->pIsolatedSourceFile->iRegistrationIndex), pRegistration->procResult.uRegistrationIndex);
-                    pProcDefValue->info.uIRandMetaFlags |= uIRofProcBodyRef;
-                    pProcDefValue->info.metaValue.knownValue.uEmbeddedValue = ir_make_direct_nyka_value(uIRofProcBodyRef);
-
-                    pRegistration->procResult.uIRofProcDecl = uIRofProcBodyRef;
-                    set_node_type_cast_expr_success(pExpr->pTCNode); // marker for already recorded definition
-
-                    if (pTCStatement->pChildBlock) {
-
-                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Queuing TC task for proclike body after proc declaration registration"), pTCContext->pWorker);
-
-                        TCContext* pTypecheckBodyCtx = (TCContext*)alloc_from(localArena, 
-                            sizeof(TCContext), alignof(TCContext));
-                        *((CompilationContext*)pTypecheckBodyCtx) = *((CompilationContext*)pTCContext);
-                        pTypecheckBodyCtx->eKind = ETypecheckContextKind::ECTXKIND_PROCBODY;
-                        pTypecheckBodyCtx->eBlockKind = ETypecheckBlockKind::EBLOCKKIND_SEQ;
-                        pTypecheckBodyCtx->eGlobalDeclScope = EScopeKind::SCOPEKIND_GLOBAL_PRIVATE; // ?
-                        pTypecheckBodyCtx->uNestedExpansionLevel = 0;
-                        pTypecheckBodyCtx->uFlags = CTXFLAG_HALT_ON_NON_SUCCESS | CTXFLAG_ALLOW_RUNTIME |
-                                                    CTXFLAG_DECLARATIONS_ARE_LOCAL | CTXFLAG_RESOLUTIONS_START_LOCAL;
-                        pTypecheckBodyCtx->pCurrentBlock = 0;
-                        pTypecheckBodyCtx->pNamespace = pTCContext->pNamespace;
-                        pTypecheckBodyCtx->pRepo = &(pRegistration->procResult.procwiseRepo);
-                        pTypecheckBodyCtx->pTmpRepo = 0;
-                        pTypecheckBodyCtx->pProcResult = &(pRegistration->procResult);
-                        pTypecheckBodyCtx->pVecLocalBindings = &(pRegistration->procResult.vecBindings);
-                        pTypecheckBodyCtx->pProcSource = &(pRegistration->procSource);
-                        pTypecheckBodyCtx->vecTypecheckedBlocks.init(localArena);
-                        pTypecheckBodyCtx->pParentContext = 0;
-                        pTypecheckBodyCtx->pVecOfGotoPlaceholdersToReturnPoint = 0;
-
-                        pTypecheckBodyCtx->uGlobalStatementOnHold = 0;
-                        pTypecheckBodyCtx->mapLocalNodeInfoIfResumingCurrentStatement = {};
-
-                        pTCContext->pIsolatedSourceFile->vecTCTasksToLaunch.append(pTypecheckBodyCtx);
-                    } else {
-                        platform_log_error("*** registered proc with missing body", true);
-                    }
-
-                }
-            }
-            reset_arena_to(beforeTCSign, pTCContext->pWorker->tmpArena);
-            return checkSign;
-
+            return typecheck_proc_declaration(pExpr, pTCStatement, pTCContext, eExpectation, inferredFromBelow);
         } else {
             return_error(pExpr, pTCStatement, pTCContext, CERR_PROCLIKE_DECL_FORM_OUTSIDE_SIGN_OR_CONST_DECLARATION_WITH_SINGLE_RHV,
                 "typecheck_expr_or_multi_invoc() : proclike decl form found outside of const declaration with single rhv");
@@ -2611,216 +2098,7 @@ local_func ETCResult typecheck_expr_or_multi_invoc(TmpTCNode* pExpr, TCStatement
 
     } else if (uNodeKind == ENodeKind::ENODE_EXPR_OTHER_DEF) {
         if (bAllowUserTypeOrProcDecl) {
-
-            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking a complex-type definition"), pTCContext->pWorker);
-            
-            Assert_(eExpectation == EExpectedExpr::EXPECT_CONSTANT);
-            u8 uTypeKind = u8(pExpr->pTCNode->ast.uNodeKindAndFlags >> 8);
-
-            switch (uTypeKind) {
-                case ETOK_STRUCT:
-                case ETOK_UNION:
-                {
-                    if (pExpr->pTCNode->ast.uPrimaryChildNodeIndex == INVALID_NODE_INDEX) {
-                        // No poly-params
-                        Arena localArena = pTCContext->pIsolatedSourceFile->localArena;
-                        TypeInfo_StructLike* pNewStructType = (TypeInfo_StructLike*)alloc_from(localArena,
-                            sizeof(TypeInfo_StructLike), alignof(TypeInfo_StructLike));
-                        u8 uCompoundType = 0;
-                        if (uTypeKind == ETOK_STRUCT)
-                            uCompoundType = COMPOUNDTYPE_IS_STRUCT; // TODO: comptime-only flags ; structview ??
-                        else { Assert_(uTypeKind == ETOK_UNION);
-                            uCompoundType = COMPOUNDTYPE_IS_UNION;
-                        }
-                        init_structlike_type_before_tc(pNewStructType, uCompoundType, 0, localArena);
-
-                        TCCompoundRegistration* pRegistration = (TCCompoundRegistration*)alloc_from(localArena,
-                            sizeof(TCCompoundRegistration), alignof(TCCompoundRegistration));
-                        pRegistration->pCompoundType = pNewStructType;
-                        // Note: pChildBlock at this point should be a 'tagged' ptr with block index in the source file's ast.
-                        pRegistration->pRootTcBlock = reinterpret_cast<TCDeclSourceBlock*>(pTCStatement->pChildBlock);
-                        FireAndForgetArenaAlloc localAlloc(localArena);
-                        // CLEANUP: check if this 'deep-copy' of the statement is really needed here ???
-                        pRegistration->pStatementWithSignature = (TCStatement*)alloc_from(localArena,
-                            sizeof(TCStatement), alignof(TCStatement));
-                        *(pRegistration->pStatementWithSignature) = *pTCStatement;
-                        pRegistration->pStatementWithSignature->vecNodes.init(localAlloc);
-                        pRegistration->pStatementWithSignature->vecNodes.append_all(pTCStatement->vecNodes);
-                        pRegistration->pStatementWithSignature->vecNodeValues.init(localAlloc);
-                        pRegistration->pStatementWithSignature->vecNodeValues.append_all(pTCStatement->vecNodeValues);
-                        pRegistration->iPrimaryIdentifier = ERES_INVALID_ID; // will be assigned later at binding stage
-                        pRegistration->uTCProgress = ECOMPOUND_NOT_YET_STARTED;
-                        pRegistration->setWaitingConstOnly.init(localArena);
-                        pRegistration->setWaitingPossiblyRuntime.init(localArena);
-
-                        u32 uRegistrationIndex = pTCContext->pIsolatedSourceFile->vecAllCompoundDef.size();
-                        if (uRegistrationIndex > 0x0000'FFFFu) {
-                            return_error(pExpr, pTCStatement, pTCContext, CERR_TOO_MANY_COMPOUNDS_IN_SAME_FILE,
-                                "typecheck_expr_or_multi_invoc() : max 64K compound-types definitions originating from a single file");
-                        }
-                        pTCContext->pIsolatedSourceFile->vecAllCompoundDef.append(pRegistration);
-                        pNewStructType->uRegistrationIndex = u16(uRegistrationIndex);
-                        pNewStructType->pRegistration = pRegistration;
-
-                        NodeValue* pStructDefValue = alloc_value_for(pExpr, EValueSlotOnNode::ENODEVALUESLOT_INTRINSIC,
-                            pTCStatement, pTCContext);
-                        pStructDefValue->pType = g_pCoreTypesInfo[ECORETYPE_TYPE];
-                        pStructDefValue->info.uIRandMetaFlags = IRFLAG_TC_ONLY|IRFLAG_IS_KNOWN;
-                        pStructDefValue->info.metaValue.knownValue.pType = pNewStructType;
-                        set_node_type_cast_expr_success(pExpr->pTCNode); // marker for already recorded definition
-
-                        if (pTCStatement->pChildBlock) {
-
-                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Queuing TC task for structlike body after structlike declaration registration"), pTCContext->pWorker);
-
-                            TCContext* pTypecheckStructBodyCtx = (TCContext*)alloc_from(localArena, 
-                                sizeof(TCContext), alignof(TCContext));
-                            *((CompilationContext*)pTypecheckStructBodyCtx) = *((CompilationContext*)pTCContext);
-                            pTypecheckStructBodyCtx->eKind = ETypecheckContextKind::ECTXKIND_COMPOUND;
-                            pTypecheckStructBodyCtx->eBlockKind = ETypecheckBlockKind::EBLOCKKIND_DECL;
-                            pTypecheckStructBodyCtx->eGlobalDeclScope = EScopeKind::SCOPEKIND_GLOBAL_PRIVATE; // ?
-                            pTypecheckStructBodyCtx->uNestedExpansionLevel = 0;
-                            pTypecheckStructBodyCtx->uFlags = CTXFLAG_DECLARATIONS_ARE_LOCAL | CTXFLAG_RESOLUTIONS_START_LOCAL;
-                            pTypecheckStructBodyCtx->pCurrentBlock = 0;
-                            pTypecheckStructBodyCtx->pNamespace = pTCContext->pNamespace;
-                            pTypecheckStructBodyCtx->pRepo = &(pTCContext->pIsolatedSourceFile->filewiseConstRepo);
-                            pTypecheckStructBodyCtx->pTmpRepo = 0;
-                            pTypecheckStructBodyCtx->pProcResult = 0;
-                            pTypecheckStructBodyCtx->pVecLocalBindings = 0;
-                            pTypecheckStructBodyCtx->pProcSource = 0;
-                            pTypecheckStructBodyCtx->vecTypecheckedBlocks = {};
-                            pTypecheckStructBodyCtx->pParentContext = 0;
-                            pTypecheckStructBodyCtx->pVecOfGotoPlaceholdersToReturnPoint = 0;
-                            pTypecheckStructBodyCtx->pCompoundToTC = pRegistration;
-
-                            pTypecheckStructBodyCtx->uGlobalStatementOnHold = 0;
-                            pTypecheckStructBodyCtx->mapLocalNodeInfoIfResumingCurrentStatement = {};
-
-                            pTCContext->pIsolatedSourceFile->vecTCTasksToLaunch.append(pTypecheckStructBodyCtx);
-
-                        } else {
-                            platform_log_error("*** registered struct or union with missing body", true);
-                        }
-
-                        return ETCResult::ETCR_SUCCESS;
-
-                    } else {
-                        // Struct with poly params
-                        // TODO
-                        return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                            "typecheck_expr_or_multi_invoc() : struct or union decl expression with polymorphic-params not yet implemented");
-                    }
-
-                } break;
-
-                case ETOK_ENUM: {
-
-                    const TypeInfo_Integral* pBaseType = (const TypeInfo_Integral*)g_pCoreTypesInfo[ECORETYPE_INT];
-                    if (pExpr->pTCNode->ast.uPrimaryChildNodeIndex != INVALID_NODE_INDEX) {
-                        TmpTCNode exprAfter = init_tmp_tc_node(pExpr->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
-                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking base type expression of enum"),
-                            pTCContext->pWorker);
-                        ETCResult eCheckBaseType = typecheck_expression(&exprAfter, pTCStatement, pTCContext, EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{});
-                        success_or_return_wait_or_error(eCheckBaseType, pExpr->pTCNode);
-                        Assert_(is_node_already_typechecked(exprAfter.pTCNode));
-                        Assert_(exprAfter.pIntrinsicValue);
-                        if (exprAfter.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
-                            Assert_(is_value_tc_only(exprAfter.pIntrinsicValue));
-                            const TypeInfo* pTypeValue = type_from_type_node(exprAfter.pIntrinsicValue);
-                            if (get_type_kind(pTypeValue) == ETypeKind::ETYPEKIND_INTEGRAL) {
-                                pBaseType = (const TypeInfo_Integral*)pTypeValue;
-                            } else {
-                                return_error(pExpr, pTCStatement, pTCContext, CERR_EXPECTED_TYPE,
-                                    "typecheck_expr_or_multi_invoc() : base type of enum must be an integral type");
-                            }
-                        } else {
-                            return_error(pExpr, pTCStatement, pTCContext, CERR_EXPECTED_TYPE,
-                                "typecheck_expr_or_multi_invoc() : enum keyword must be last on statement, or followed by an integral base type");
-                        }
-                    }
-
-                    Arena localArena = pTCContext->pIsolatedSourceFile->localArena;
-                    TypeInfo_Enum* pNewEnumType = (TypeInfo_Enum*)alloc_from(localArena, sizeof(TypeInfo_Enum), alignof(TypeInfo_Enum));
-                    init_enum_type_before_tc(pNewEnumType, pBaseType, 0, 0, localArena);
-
-                    TCCompoundRegistration* pRegistration = (TCCompoundRegistration*)alloc_from(localArena,
-                        sizeof(TCCompoundRegistration), alignof(TCCompoundRegistration));
-                    pRegistration->pCompoundType = pNewEnumType;
-                    // Note: pChildBlock at this point should be a 'tagged' ptr with block index in the source file's ast.
-                    pRegistration->pRootTcBlock = reinterpret_cast<TCDeclSourceBlock*>(pTCStatement->pChildBlock);
-                    FireAndForgetArenaAlloc localAlloc(localArena);
-                    // CLEANUP: check if this 'deep-copy' of the statement is really needed here ???
-                    pRegistration->pStatementWithSignature = (TCStatement*)alloc_from(localArena,
-                        sizeof(TCStatement), alignof(TCStatement));
-                    *(pRegistration->pStatementWithSignature) = *pTCStatement;
-                    pRegistration->pStatementWithSignature->vecNodes.init(localAlloc);
-                    pRegistration->pStatementWithSignature->vecNodes.append_all(pTCStatement->vecNodes);
-                    pRegistration->pStatementWithSignature->vecNodeValues.init(localAlloc);
-                    pRegistration->pStatementWithSignature->vecNodeValues.append_all(pTCStatement->vecNodeValues);
-                    pRegistration->iPrimaryIdentifier = ERES_INVALID_ID; // will be assigned later at binding stage
-                    pRegistration->uTCProgress = ECOMPOUND_NOT_YET_STARTED;
-                    pRegistration->setWaitingConstOnly.init(localArena);
-                    pRegistration->setWaitingPossiblyRuntime.init(localArena);
-
-                    u32 uRegistrationIndex = pTCContext->pIsolatedSourceFile->vecAllCompoundDef.size();
-                    if (uRegistrationIndex > 0x0000'FFFFu) {
-                        return_error(pExpr, pTCStatement, pTCContext, CERR_TOO_MANY_COMPOUNDS_IN_SAME_FILE,
-                            "typecheck_expr_or_multi_invoc() : max 64K compound-types definitions originating from a single file");
-                    }
-                    pTCContext->pIsolatedSourceFile->vecAllCompoundDef.append(pRegistration);
-                    pNewEnumType->uRegistrationIndex = u16(uRegistrationIndex);
-                    pNewEnumType->pRegistration = pRegistration;
-
-                    NodeValue* pEnumDefValue = alloc_value_for(pExpr, EValueSlotOnNode::ENODEVALUESLOT_INTRINSIC,
-                        pTCStatement, pTCContext);
-                    pEnumDefValue->pType = g_pCoreTypesInfo[ECORETYPE_TYPE];
-                    pEnumDefValue->info.uIRandMetaFlags = IRFLAG_TC_ONLY|IRFLAG_IS_KNOWN;
-                    pEnumDefValue->info.metaValue.knownValue.pType = pNewEnumType;
-                    set_node_type_cast_expr_success(pExpr->pTCNode); // marker for already recorded definition
-
-                    if (pTCStatement->pChildBlock) {
-
-                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Queuing TC task for enum body after enum declaration registration"), pTCContext->pWorker);
-
-                        TCContext* pTypecheckEnumBodyCtx = (TCContext*)alloc_from(localArena, 
-                            sizeof(TCContext), alignof(TCContext));
-                        *((CompilationContext*)pTypecheckEnumBodyCtx) = *((CompilationContext*)pTCContext);
-                        pTypecheckEnumBodyCtx->eKind = ETypecheckContextKind::ECTXKIND_COMPOUND;
-                        pTypecheckEnumBodyCtx->eBlockKind = ETypecheckBlockKind::EBLOCKKIND_DECL;
-                        pTypecheckEnumBodyCtx->eGlobalDeclScope = EScopeKind::SCOPEKIND_GLOBAL_PRIVATE; // ?
-                        pTypecheckEnumBodyCtx->uNestedExpansionLevel = 0;
-                        pTypecheckEnumBodyCtx->uFlags = CTXFLAG_HALT_ON_NON_SUCCESS | // enum TCs are sequential, contrary to struct/unions
-                                                        CTXFLAG_DECLARATIONS_ARE_LOCAL | CTXFLAG_RESOLUTIONS_START_LOCAL;
-                        pTypecheckEnumBodyCtx->pCurrentBlock = 0;
-                        pTypecheckEnumBodyCtx->pNamespace = pTCContext->pNamespace;
-                        pTypecheckEnumBodyCtx->pRepo = &(pTCContext->pIsolatedSourceFile->filewiseConstRepo);
-                        pTypecheckEnumBodyCtx->pTmpRepo = 0;
-                        pTypecheckEnumBodyCtx->pProcResult = 0;
-                        pTypecheckEnumBodyCtx->pVecLocalBindings = 0;
-                        pTypecheckEnumBodyCtx->pProcSource = 0;
-                        pTypecheckEnumBodyCtx->vecTypecheckedBlocks = {};
-                        pTypecheckEnumBodyCtx->pParentContext = 0;
-                        pTypecheckEnumBodyCtx->pVecOfGotoPlaceholdersToReturnPoint = 0;
-                        pTypecheckEnumBodyCtx->pCompoundToTC = pRegistration;
-
-                        pTypecheckEnumBodyCtx->uGlobalStatementOnHold = 0;
-                        pTypecheckEnumBodyCtx->mapLocalNodeInfoIfResumingCurrentStatement = {};
-
-                        pTCContext->pIsolatedSourceFile->vecTCTasksToLaunch.append(pTypecheckEnumBodyCtx);
-
-                    } else {
-                        platform_log_error("*** registered enum with missing body", true);
-                    }
-
-                    return ETCResult::ETCR_SUCCESS;
-
-                } break;
-
-                default:
-                    return_error(pExpr, pTCStatement, pTCContext, FERR_UNREACHABLE,
-                        "typecheck_expr_or_multi_invoc() : unknown complex-type kind");
-            }
-
+            return typecheck_compound_declaration(pExpr, pTCStatement, pTCContext, eExpectation, inferredFromBelow);
         } else {
             return_error(pExpr, pTCStatement, pTCContext, CERR_COMPLEX_TYPE_DECL_FORM_OUTSIDE_CONST_DECLARATION_WITH_SINGLE_RHV,
                 "typecheck_expr_or_multi_invoc() : complex type decl form found outside of const declaration with single rhv");
@@ -2923,431 +2201,6 @@ when_macro_start_again:
     }
 }
 
-local_func ETCResult do_const_binding(TmpTCNode* pDecl, TmpTCNode* pValue, TCStatement* pTCStatement, TCContext* pTCContext)
-{
-    Assert_(is_node_already_typechecked(pDecl->pTCNode));
-    Assert_(pDecl->pIntrinsicValue->pType); // sinks should have been ruled out
-    if (is_node_already_type_casted(pDecl->pTCNode)) { // special for decls, without truly a cast value.
-        return ETCResult::ETCR_SUCCESS;                // ...indicates already bound => NOOP and returning success 
-    }
-
-    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Performing single-binding as constant"), pTCContext->pWorker);
-
-    // 'regular' const declaration NOT allowed in enums, caller should have prevented this (explicit values in enum are set using the '=' token instead)
-    Assert_(!is_ctx_compound(pTCContext) || get_type_kind(pTCContext->pCompoundToTC->pCompoundType) != ETYPEKIND_ENUM);
-
-    Assert_(is_node_already_typechecked(pValue->pTCNode));
-    NodeValue* pResultingValue = pValue->pIntrinsicValue;
-    Assert_(is_value_tc_const(pResultingValue));
-
-    int iIdentifierHandle = get_id_from_decl_node(pDecl, pTCStatement);
-    Assert_(iIdentifierHandle >= COUNT_RESERVED_WORDS);
-
-    ValueBinding* pBinding = (ValueBinding*)alloc_from(pTCContext->pIsolatedSourceFile->localArena, 
-        sizeof(ValueBinding), alignof(ValueBinding));
-    set_binding_source_ref(pBinding, pTCStatement, pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
-    *((NodeValue*)pBinding) = *pResultingValue;
-    Assert_(pBinding->info.uIRandMetaFlags == pResultingValue->info.uIRandMetaFlags);
-    pBinding->info.uIRandMetaFlags |= IRFLAG_TC_BINDING_INSTANCE;
-    if (!is_value_tc_only(pBinding)) {
-        Assert_(ir_is_valid_param_(pBinding->info.uIRandMetaFlags));
-        if (ir_is_immediate(pBinding->info.uIRandMetaFlags)) {
-            // if value is an immediate, we need to create a new declaration entry, for it to become referencable.
-            u32 uIRPos = pTCContext->pRepo->uSize;
-            IREntry* pDecl = ir_append_new_entry(pTCContext->pRepo);
-            pDecl->uInstrCodeAndFormatAndFirstParam = u64(IRIT_DECLARATION) | (u64(get_ir_format(pBinding->pType)) << 16);
-            u64 uSlotCountAndAlign = u64(get_slots_count(pBinding->pType)) | (u64(get_log2_of_align_bytes(pBinding->pType)) << 32);
-            pDecl->uInstrMetaFlagsAndSecondParam = (pBinding->info.uIRandMetaFlags & IR_STD_PARAM_METAMASK) | (uSlotCountAndAlign << IR_STD_PARAM_SHIFT);
-            pDecl->metaValue = pBinding->info.metaValue;
-            
-            pBinding->info.uIRandMetaFlags &= IR_STD_PARAM_METAMASK;
-            pBinding->info.uIRandMetaFlags |= pTCContext->pRepo->uIRRepoId == IR_REPO_ID_CURRENT_PROC ? 
-                ir_make_std_code_in_cur_proc(uIRPos) : ir_make_global_const_code_in_file(pTCContext->pIsolatedSourceFile->iRegistrationIndex, uIRPos);
-        }
-        pBinding->info.uIRandMetaFlags |= IRFLAG_TC_REFERENCABLE;
-    } else {
-        Assert_(!is_value_tc_referencable(pBinding));
-    }
-    pBinding->iIdentifierHandle = iIdentifierHandle;
-    pBinding->_reserved = 0;
-
-    if (is_ctx_compound(pTCContext)) {
-        Assert_(pTCContext->pCompoundToTC);
-        Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE);
-        TypeInfo_StructLike* pAsStructLike = (TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType;
-        Assert_(pTCContext->pCurrentBlock == pTCContext->pCompoundToTC->pRootTcBlock);
-
-        u32 uStatementIndex = pTCStatement->uStatementIndexInBlock;
-        Assert_(0 == (uStatementIndex & 0xF800'0000u));
-
-        u32 uRegistrationPos = pAsStructLike->vecAllMembers.size();
-
-        pAsStructLike->vecAllMembers.append(pBinding);
-        pAsStructLike->mapAllMembers.insert(iIdentifierHandle, uRegistrationPos);
-
-        pBinding->uScopeAndLocation = EScopeKind::SCOPEKIND_COMPOUND | (uRegistrationPos << 8);
-        pBinding->uCompoundDeclSort = (uStatementIndex << 5); // we don't really care about index in statement for consts.
-
-    } else if (does_tc_ctx_require_declare_as_local(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST)) {
-        TmpArray<ValueBinding*>* pVecRegistry = get_tc_ctx_local_declaration_registry(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
-        u32 uRegistrationPos = pVecRegistry->size();
-        pBinding->uScopeAndLocation = (uRegistrationPos << 8) | EScopeKind::SCOPEKIND_PROC_BLOCK_LOCAL;
-        pVecRegistry->append(pBinding);
-        TCDeclSourceBlock* pDeclBlock = get_tc_ctx_local_declaration_block(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
-        pDeclBlock->pMapBlockDeclarationsById->insert(iIdentifierHandle, uRegistrationPos);
-
-    } else { // filewise global const
-        u32 uRegistrationPos = pTCContext->pIsolatedSourceFile->vecAllGlobalBindings.size();
-        pBinding->uScopeAndLocation = (uRegistrationPos << 8) | pTCContext->eGlobalDeclScope;
-        pTCContext->pIsolatedSourceFile->vecAllGlobalBindings.append(pBinding);
-        pTCContext->pNamespace->mapAllGlobalDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-        if (pTCContext->eGlobalDeclScope <= EScopeKind::SCOPEKIND_GLOBAL_PACKAGE) {
-            pTCContext->pNamespace->mapAccessibleDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-            if (pTCContext->eGlobalDeclScope == EScopeKind::SCOPEKIND_GLOBAL_PUBLIC)
-                pTCContext->pNamespace->mapPublicDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-        } else {
-            Assert_(pTCContext->eGlobalDeclScope == EScopeKind::SCOPEKIND_GLOBAL_PRIVATE);
-        }
-
-        pTCContext->pNamespace->setOfNewlyDeclaredGlobalIdentifiers.insert(iIdentifierHandle);
-    }
-
-    switch (get_type_kind(pResultingValue->pType)) {
-        case ETypeKind::ETYPEKIND_PROCLIKEBODY: {
-            Assert_(ir_is_valid_param_(pResultingValue->info.uIRandMetaFlags));
-            Assert_(irflag_is_known_or_nyka(pResultingValue->info.uIRandMetaFlags)); // Since this is a const...
-            Assert_(irflag_is_or_has_nyka(pResultingValue->info.uIRandMetaFlags));   // Since this is a known *proc*
-            Assert_(irflag_is_known_embd(pResultingValue->info.uIRandMetaFlags));    // Since this should be a single nyka...
-            u64 uNykaOfProc = pResultingValue->info.metaValue.knownValue.uEmbeddedValue;
-            i32 expect0;
-            u64 uIRofProc = ir_decode_nyka_value(uNykaOfProc, &expect0);
-            Assert_(0 == expect0);
-            Assert_(!ir_is_immediate(pResultingValue->info.uIRandMetaFlags) ||
-                    (ir_is_nyka_immediate(pResultingValue->info.uIRandMetaFlags) && ir_get_param_from_nyka_immediate(pResultingValue->info.uIRandMetaFlags) == uIRofProc));
-            IRRepo* pRepo;
-            u32 uIndex;
-            SourceFileDescAndState* pSourceFile;
-            EEntryKind eKind;
-            ir_decode_non_imm(uIRofProc, pTCContext, &pRepo, &uIndex, &pSourceFile, &eKind);
-            Assert_(eKind == EEntryKind::EEK_IS_PROCBODY_REF);
-            Assert_(pRepo == 0);
-            Assert_(pSourceFile == pTCContext->pIsolatedSourceFile); // TODO: check this assumption ?
-            TCProcBodyRegistration* pProcReg = pSourceFile->vecAllProcBodies[uIndex];
-            if (pProcReg->procResult.iPrimaryIdentifier <= 0) { // if proc not yet assigned a primary identifier: assign current id to be bound to that proc primary.
-                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("First binding of proc %u in file %u => bound to primary identifier '%s'",
-                    u64(uIndex), u64(u32(pSourceFile->iRegistrationIndex)), reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierHandle).c_str())), pTCContext->pWorker);
-                pProcReg->procResult.iPrimaryIdentifier = iIdentifierHandle;
-            }
-        } break;
-
-        case ETYPEKIND_OTHERCORE: {
-            if (pResultingValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
-                const TypeInfo* pTypeValue = type_from_type_node(pResultingValue);
-                switch (get_type_kind(pTypeValue)) {
-                    case ETYPEKIND_STRUCTLIKE: 
-                    case ETYPEKIND_ENUM: {
-                        const TypeInfo_CompoundBase* pAsCompound = (const TypeInfo_CompoundBase*)pTypeValue;
-                        Assert_(pAsCompound->pRegistration);
-                        if (pAsCompound->pRegistration->iPrimaryIdentifier <= 0) { // if compound not yet assigned a primary identifier: assign current id to be bound to that proc primary.
-                            pAsCompound->pRegistration->iPrimaryIdentifier = iIdentifierHandle;
-                            BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("First binding of compound %u in file %u => bound to primary identifier '%s'",
-                                u64(pAsCompound->uRegistrationIndex), u64(u32(pTCContext->pIsolatedSourceFile->iRegistrationIndex)), reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierHandle).c_str())), pTCContext->pWorker);
-                        }
-                    } break;
-                }
-            }
-        } break;
-    }
-
-    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Successfully bound identifier '%s' (%u) as a constant in current context",
-        reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierHandle).c_str()), u64(u32(iIdentifierHandle))), pTCContext->pWorker);
-    return set_node_type_cast_expr_success(pDecl->pTCNode); // special for decls, without truly a cast value.
-}
-
-constexpr u64 tLargeConstAllZeroes[4096u] = {};
-
-local_func ETCResult do_var_binding(TmpTCNode* pDecl, TmpTCNode* pOptType, TmpTCNode* pOptValue,
-    TCStatement* pTCStatement, TCContext* pTCContext, TmpTCNode* tAllDeclBase = 0)
-{
-    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Performing single-binding as variable"), pTCContext->pWorker);
-
-    Assert_(is_node_already_typechecked(pDecl->pTCNode));
-    Assert_(pDecl->pIntrinsicValue->pType); // sinks should have been ruled out
-    Assert_(pOptType || pOptValue);
-
-    // Variable declaration NOT allowed in enums, caller should have prevented this
-    Assert_(!is_ctx_compound(pTCContext) || get_type_kind(pTCContext->pCompoundToTC->pCompoundType) != ETYPEKIND_ENUM);
-
-    const TypeInfo* pExplicitType = 0;
-    if (pOptType) {
-        Assert_(is_node_already_typechecked(pOptType->pTCNode));
-        Assert_(is_value_tc_const(pOptType->pIntrinsicValue));
-        if (pOptType->pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
-            Assert_(is_value_tc_only(pOptType->pIntrinsicValue));
-            pExplicitType = type_from_type_node(pOptType->pIntrinsicValue);
-            check_type_availability_may_return_wait_or_error(pExplicitType, pDecl, pTCStatement, pTCContext, "do_var_binding() : cannot finalize binding to ");
-            u16 uTypeErr = 0;
-            if (!is_allowed_as_runtime_type(pExplicitType, pTCContext, &uTypeErr)) {
-                if (is_ctx_compound(pTCContext) && 
-                    0 != (pTCContext->pCompoundToTC->pCompoundType->_coreType & COMPOUNDTYPE_IS_COMPTIME_ONLY)) {
-                    // TODO
-                    return_error(pOptType, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                        "do_var_binding() : authorized declaration of comptime-only member within compound with comptime-only flag... not yet implemented");
-                } else {
-                    return_error(pOptType, pTCStatement, pTCContext, uTypeErr,
-                        "do_var_binding() : unallowed non-runtime type in explicit type-slot");
-                }
-            }
-        } else {
-            return_error(pOptType, pTCStatement, pTCContext, CERR_EXPECTED_TYPE,
-                "do_var_binding() : expected Type in type-slot");
-        }
-    } else {
-        if (is_ctx_compound(pTCContext)) {
-            return_error(pOptType, pTCStatement, pTCContext, CERR_STRUCT_OR_UNION_MEMBER_DECLARATION_MUST_BE_TYPE_ONLY,
-                "do_var_binding() : within struct or union, expected var declaration with explicit type (and no initial value)");
-        }
-        Assert_(pOptValue);
-        Assert_(pOptValue->pIntrinsicValue->pType); // explicit no-init should have been ruled out by caller if no type...
-    }
-
-    int iIdentifierHandle = get_id_from_decl_node(pDecl, pTCStatement);
-    Assert_(iIdentifierHandle >= COUNT_RESERVED_WORDS);
-
-    ValueBinding* pBinding = (ValueBinding*)alloc_from(pTCContext->pIsolatedSourceFile->localArena, 
-        sizeof(ValueBinding), alignof(ValueBinding));
-    set_binding_source_ref(pBinding, pTCStatement, pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
-    pBinding->iIdentifierHandle = iIdentifierHandle;
-    pBinding->info.uIRandMetaFlags = IRFLAG_TC_BINDING_INSTANCE|IRFLAG_TC_REFERENCABLE;
-    pBinding->info.metaValue._payload = 0uLL;
-
-    if (is_ctx_compound(pTCContext)) {
-        Assert_(pTCContext->pCompoundToTC);
-
-        Assert_(pTCContext->pCurrentBlock == pTCContext->pCompoundToTC->pRootTcBlock);
-        Assert_(tAllDeclBase);
-        Assert_(pDecl - tAllDeclBase < 32);
-        u32 uDeclIndexInStatement = u32(pDecl - tAllDeclBase);
-        u32 uStatementIndex = pTCStatement->uStatementIndexInBlock;
-        Assert_(0 == (uStatementIndex & 0xF800'0000u));
-        if (!pOptValue) {
-
-            Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETYPEKIND_STRUCTLIKE); // no vars for enums
-            TypeInfo_StructLike* pAsStructLike = (TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType;
-
-            u32 uRegistrationPos = pAsStructLike->vecAllMembers.size();
-            pAsStructLike->vecAllMembers.append(pBinding);
-            pAsStructLike->mapAllMembers.insert(iIdentifierHandle, uRegistrationPos);
-
-            pBinding->uScopeAndLocation = EScopeKind::SCOPEKIND_COMPOUND | (uRegistrationPos << 8);
-            pBinding->uCompoundDeclSort = (uStatementIndex << 5) | uDeclIndexInStatement;
-            pBinding->pType = pExplicitType;
-
-        } else {
-            return_error(pOptType, pTCStatement, pTCContext, CERR_STRUCT_OR_UNION_MEMBER_DECLARATION_MUST_BE_TYPE_ONLY,
-                "do_var_binding() : within struct or union, all 'var' member declaration are expected of the explicit-type form, with no initial value");
-        }
-
-    } else if (does_tc_ctx_require_declare_as_local(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_VAR)) {
-
-        TmpArray<ValueBinding*>* pVecRegistry = get_tc_ctx_local_declaration_registry(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_VAR);
-        u32 uRegistrationPos = pVecRegistry->size();
-        pBinding->uScopeAndLocation = (uRegistrationPos << 8) | EScopeKind::SCOPEKIND_PROC_BLOCK_LOCAL;
-        pVecRegistry->append(pBinding);
-        TCDeclSourceBlock* pDeclBlock = get_tc_ctx_local_declaration_block(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_VAR);
-        pDeclBlock->pMapBlockDeclarationsById->insert(iIdentifierHandle, uRegistrationPos);
-
-        Assert_(pTCContext->pProcResult);
-        IRRepo* pLocalRepo = &(pTCContext->pProcResult->procwiseRepo);
-        u32 uIRPos = pLocalRepo->uSize;
-        IREntry* pDecl = ir_append_new_entry(pLocalRepo);
-
-        NodeValue* pExplicitInitialValue = 0;
-        const TypeInfo* pResultingType;
-        if (pOptValue) {
-            Assert_(is_node_already_typechecked(pOptValue->pTCNode));
-            pExplicitInitialValue = pOptValue->pIntrinsicValue;
-            if (pExplicitInitialValue->pType) { // Otherwise, denotes an explicit uninitialization
-                if (pExplicitType) {
-                    pResultingType = pExplicitType;
-                } else {
-                    pResultingType = when_no_explicit_cast_get_runtime_type(pExplicitInitialValue->pType, pTCContext);
-                    u16 uTypeErr = 0;
-                    if (!is_allowed_as_runtime_type(pResultingType, pTCContext, &uTypeErr)) {
-                        return_error(pOptType, pTCStatement, pTCContext, uTypeErr,
-                            "do_var_binding() : unallowed non-runtime type inferred from value");
-                    }
-                }
-                if (!are_types_same(pResultingType, pExplicitInitialValue->pType, pTCContext)) {
-                    ETCResult checkConv = do_implicit_cast(pOptValue, pResultingType, pTCStatement, pTCContext, EExpectedExpr::EXPECT_REGULAR);
-                    if (checkConv != ETCResult::ETCR_SUCCESS)
-                        return checkConv;
-                    Assert_(is_node_already_type_casted(pOptValue->pTCNode));
-                    pExplicitInitialValue = pOptValue->pFinalValue;
-                }
-            } else {
-                Assert_(pExplicitType);
-                pResultingType = pExplicitType;
-            }
-        } else {
-            Assert_(pExplicitType);
-            pResultingType = pExplicitType;
-        }
-
-        pBinding->pType = pResultingType;
-        u8 uResultingFormat = get_ir_format(pResultingType);
-        u32 uResultingSlotsCount = get_slots_count(pResultingType);
-        pDecl->uInstrCodeAndFormatAndFirstParam = u64(IRIT_LOCAL_VAR_DECL) | u64(IR_INSTRFLAG_IS_ASSIGNABLE) | (u64(uResultingFormat) << 16);
-        u64 uSlotCountAndAlign = u64(uResultingSlotsCount) | (u64(get_log2_of_align_bytes(pResultingType)) << 32);
-        pDecl->uInstrMetaFlagsAndSecondParam = (u64(uSlotCountAndAlign) << IR_STD_PARAM_SHIFT);
-        pDecl->metaValue._payload = 0uLL;
-
-        u64 uIRofDecl = ir_make_std_code_in_cur_proc(uIRPos);
-        pBinding->info.uIRandMetaFlags |= uIRofDecl;
-
-        if (pExplicitInitialValue) {
-            if (pExplicitInitialValue->pType) { // Otherwise, denotes an explicit uninitialization
-                Assert_(ir_is_valid_param_(pExplicitInitialValue->info.uIRandMetaFlags));
-                Assert_(!is_value_pseudo_valued_cond(pExplicitInitialValue));
-                do_store_value_to(uIRofDecl, pExplicitInitialValue->info.uIRandMetaFlags & IR_STD_PARAM_MASK,
-                    uResultingFormat, uResultingSlotsCount, pTCStatement, pTCContext);
-            } // Otherwise NOOP after declaration
-        } else { // No explicit => implicit zeroed
-            u32 uPosOfReset = ir_emit_reset_to_zero(uIRofDecl, uResultingFormat, ir_make_int_immediate(i32(uResultingSlotsCount)), pLocalRepo, pTCContext);
-            pTCStatement->uLastIRorGlobalTCResult = uPosOfReset;
-        }
-
-    } else { // Filewise global
-    
-        u32 uRegistrationPos = pTCContext->pIsolatedSourceFile->vecAllGlobalBindings.size();
-        pBinding->uScopeAndLocation = (uRegistrationPos << 8) | pTCContext->eGlobalDeclScope;
-
-        SourceFileDescAndState* pSourceFileForGlobalDecl = get_tc_global_declaration_file(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_VAR);
-        u32 uIRPos = pSourceFileForGlobalDecl->filewiseGlobalVarRepo.uSize;
-        IREntry* pDecl = ir_append_new_entry(&(pSourceFileForGlobalDecl->filewiseGlobalVarRepo));
-
-        if (pOptValue) {
-            Assert_(is_node_already_typechecked(pOptValue->pTCNode));
-            NodeValue* pResultingInitialValue = pOptValue->pIntrinsicValue;
-            Assert_(pResultingInitialValue->pType); // explicit no-init should have been ruled out here
-            Assert_(is_value_tc_const(pResultingInitialValue));
-            const TypeInfo* pResultingType;
-            if (pExplicitType)
-                pResultingType = pExplicitType;
-            else {
-                pResultingType = when_no_explicit_cast_get_runtime_type(pResultingInitialValue->pType, pTCContext);
-                u16 uTypeErr = 0;
-                if (!is_allowed_as_runtime_type(pResultingType, pTCContext, &uTypeErr)) {
-                    return_error(pOptType, pTCStatement, pTCContext, uTypeErr,
-                        "do_var_binding() : unallowed non-runtime type inferred from value");
-                }
-            }
-            pBinding->pType = pResultingType;
-
-            if (!are_types_same(pResultingType, pResultingInitialValue->pType, pTCContext)) {
-                ETCResult checkConv = do_implicit_cast(pOptValue, pResultingType, pTCStatement, pTCContext, EExpectedExpr::EXPECT_CONSTANT);
-                if (checkConv != ETCResult::ETCR_SUCCESS)
-                    return checkConv;
-                Assert_(is_node_already_type_casted(pOptValue->pTCNode));
-                pResultingInitialValue = pOptValue->pFinalValue;
-                Assert_(is_value_tc_const(pResultingInitialValue));
-            }
-
-            pDecl->uInstrCodeAndFormatAndFirstParam = u64(IRIT_GLOBAL_VAR_DECL) | u64(IR_INSTRFLAG_IS_ASSIGNABLE) | (u64(get_ir_format(pResultingType)) << 16);
-            u64 uSlotCountAndAlign = u64(get_slots_count(pResultingType)) | (u64(get_log2_of_align_bytes(pResultingType)) << 32);
-            pDecl->uInstrMetaFlagsAndSecondParam = (pResultingInitialValue->info.uIRandMetaFlags & IR_STD_PARAM_METAMASK) | (u64(uSlotCountAndAlign) << IR_STD_PARAM_SHIFT);
-            pDecl->metaValue = pResultingInitialValue->info.metaValue;
-
-        } else {
-            Assert_(pExplicitType);
-            pBinding->pType = pExplicitType;
-            pDecl->uInstrCodeAndFormatAndFirstParam = u64(IRIT_GLOBAL_VAR_DECL) | u64(IR_INSTRFLAG_IS_ASSIGNABLE) |  (u64(get_ir_format(pExplicitType)) << 16);
-            u64 uSlotCountAndAlign = u64(get_slots_count(pExplicitType)) | (u64(get_log2_of_align_bytes(pExplicitType)) << 32);
-            pDecl->uInstrMetaFlagsAndSecondParam = (uSlotCountAndAlign << IR_STD_PARAM_SHIFT);
-            u32 uRuntimeByteSize = get_runtime_sizeof(pExplicitType);
-            if (uRuntimeByteSize <= 8u) {
-                pDecl->uInstrMetaFlagsAndSecondParam |= u64(IRFLAG_IS_KNOWN|IRFLAG_IS_KNOWN_EMBD|IRFLAG_IS_KNOWN_ZERO);
-                pDecl->metaValue.knownValue.uEmbeddedValue = 0uLL;
-            } else {
-                pDecl->uInstrMetaFlagsAndSecondParam |= u64(IRFLAG_IS_KNOWN|IRFLAG_IS_KNOWN_ZERO);
-                if (uRuntimeByteSize <= 4096u * 8u)
-                    pDecl->metaValue.knownValue.pPtrToRawData = const_cast<u8*>(reinterpret_cast<const u8*>(tLargeConstAllZeroes));
-                else {
-                    u8* pAllocZeroes = alloc_from(pTCContext->pIsolatedSourceFile->localArena, uRuntimeByteSize, 8u);
-                    memset(pAllocZeroes, 0x00u, uRuntimeByteSize);
-                    pDecl->metaValue.knownValue.pPtrToRawData = pAllocZeroes;
-                }
-            }
-        }
-
-        pBinding->info.uIRandMetaFlags |= ir_make_global_var_code_in_file(u32(pSourceFileForGlobalDecl->iRegistrationIndex), uIRPos);
-
-        pTCContext->pIsolatedSourceFile->vecAllGlobalBindings.append(pBinding);
-        pTCContext->pNamespace->mapAllGlobalDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-        if (pTCContext->eGlobalDeclScope <= EScopeKind::SCOPEKIND_GLOBAL_PACKAGE) {
-            pTCContext->pNamespace->mapAccessibleDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-            if (pTCContext->eGlobalDeclScope == EScopeKind::SCOPEKIND_GLOBAL_PUBLIC)
-                pTCContext->pNamespace->mapPublicDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-        } else {
-            Assert_(pTCContext->eGlobalDeclScope == EScopeKind::SCOPEKIND_GLOBAL_PRIVATE);
-        }
-
-        pTCContext->pNamespace->setOfNewlyDeclaredGlobalIdentifiers.insert(iIdentifierHandle);
-    }
-
-    Assert_(!is_value_tc_const(pBinding));
-    Assert_(ir_is_valid_param_(pBinding->info.uIRandMetaFlags) || is_ctx_compound(pTCContext)); // vars in compounds hack the IR slot
-    Assert_(is_value_tc_referencable(pBinding));
-
-    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Successfully bound identifier '%s' (%u) as a variable in current context",
-        reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierHandle).c_str()), u64(u32(iIdentifierHandle))), pTCContext->pWorker);
-    return set_node_type_cast_expr_success(pDecl->pTCNode); // special for decls, without truly a cast value.
-}
-
-local_func bool _check_not_circular_using_at(TCNamespace* pUsedNamespace, TmpSet<TCNamespace*>* ioSetUsed)
-{
-    Assert_(ioSetUsed->find(pUsedNamespace) == ioSetUsed->end());
-    u32 uCountUsingThere = pUsedNamespace->vecUsedNamespaces.size();
-    if (uCountUsingThere < 1u) {
-        return true;
-    } else {
-        if (uCountUsingThere == 1u) {
-            TCNamespace* pUsed = pUsedNamespace->vecUsedNamespaces[0u]->pOrigNamespace;
-            if (ioSetUsed->find(pUsed) == ioSetUsed->end()) {
-                ioSetUsed->insert(pUsedNamespace);
-                return _check_not_circular_using_at(pUsed, ioSetUsed);
-            } else
-                return false;
-        } else { Assert_(uCountUsingThere > 1u);
-            ioSetUsed->insert(pUsedNamespace);
-            for (u32 uUsed = 0u; uUsed < uCountUsingThere; uUsed++) {
-                TCNamespace* pUsed = pUsedNamespace->vecUsedNamespaces[uUsed]->pOrigNamespace;
-                if (ioSetUsed->find(pUsed) == ioSetUsed->end()) {
-                    TmpSet<TCNamespace*> setUsedTmp;
-                    setUsedTmp.init(ioSetUsed->_alloc, *ioSetUsed);
-                    if (!_check_not_circular_using_at(pUsed, &setUsedTmp))
-                        return false;
-                } else
-                    return false;
-            }
-            return true;
-        }
-    }
-}
-
-local_func bool check_not_circular_using_from(TCNamespace* pSrcNamespace, TCNamespace* pUsedNamespace, Arena tmpArena)
-{
-    if (pUsedNamespace == pSrcNamespace)
-        return false;
-    ArenaRefPoint refPointBefore = get_arena_ref_point(tmpArena);
-    TmpSet<TCNamespace*> setUsed;
-    setUsed.init(FireAndForgetArenaAlloc(tmpArena));
-    setUsed.insert(pSrcNamespace);
-    bool bResult = _check_not_circular_using_at(pUsedNamespace, &setUsed);
-    reset_arena_no_release_to(refPointBefore, tmpArena);
-    return bResult;
-}
-
 local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement* pTCStatement, TCContext* pTCContext)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
@@ -3356,124 +2209,168 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
     TmpTCNode whatToUse = init_tmp_tc_node(pMainNode->pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
     {
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
-            "Typechecking Expr after 'using' statement"), pTCContext->pWorker);
-        ETCResult checkWhatToUse = typecheck_expression(&whatToUse, pTCStatement, pTCContext, EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{});
+            "Typechecking Expr after 'using' or 'including' statement"), pTCContext->pWorker);
+        ETCResult checkWhatToUse = typecheck_expression(&whatToUse, pTCStatement, pTCContext,
+            EExpectedExpr::EXPECT_CONSTANT, UpwardsInference{}, true); // last 'true' here allows declarations
         success_or_return_wait_or_error(checkWhatToUse, pMainNode->pTCNode);
     }
 
     Assert_(whatToUse.pIntrinsicValue);
     Assert_(whatToUse.pIntrinsicValue->pType);
-    if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_NAMESPACE]) {
-        Assert_(is_value_tc_only(whatToUse.pIntrinsicValue));
-        if (!is_ctx_compound(pTCContext)) {
-            if (is_ctx_global(pTCContext)) {
-                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
-                    "Registration of a new namespace as 'using' in current namespace"), pTCContext->pWorker);
 
-                i32 iNamespaceSourceFile; u32 uNamespaceRegistration;
-                decode_namespace_id(whatToUse.pIntrinsicValue->info.metaValue.knownValue.uEmbeddedValue,
-                    &iNamespaceSourceFile, &uNamespaceRegistration);
-                SourceFileDescAndState* pOrigSourceFile = pTCContext->pProgCompilationState->vecSourceFiles[u32(iNamespaceSourceFile)];
-                TCNamespace* pOrigNamespace = pOrigSourceFile->vecNamespaces[uNamespaceRegistration];
+    u8 uKey = u8(pMainNode->pTCNode->ast.uNodeKindAndFlags >> 8);
+    if (uKey == ETOK_USING) {
 
-                acquire_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
-                if (!check_not_circular_using_from(pTCContext->pNamespace, pOrigNamespace, pTCContext->pWorker->tmpArena)) {
-                    release_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                        "'using' of this namespace here would create a circular using chain. This is fobidden.");
-                }
-
-                pTCContext->pNamespace->vecUsedNamespaces.append((ReferencedNamespace*)pOrigNamespace);
-                u64 uCurrentNamespaceId = get_namespace_id((ReferencedNamespace*)pTCContext->pNamespace);
-                //acquire_write_laggued_state_lock(pOrigSourceFile, pTCContext);
-                pOrigNamespace->mapOthersUsingThis.insert(uCurrentNamespaceId, (ReferencedNamespace*)pTCContext->pNamespace);
-                //release_write_laggued_state_lock(pOrigSourceFile, pTCContext);
-                release_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
-                return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
-            } else {
-                Assert_(is_ctx_regular_proc_body(pTCContext));
-                // TODO
-                return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                    "'using' of namespace-like within proc-body not yet implemented");
-            }
-        } else { Assert_(is_ctx_compound(pTCContext));
-            Assert_(pTCContext->pCompoundToTC);
-            if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
-                return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                    "'using' of namespace within a struct-like is invalid.");
-            } else { Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM);
-                return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                    "'using' of namespace within enum is invalid.");
-            }
-        }
-    } else if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
-        const TypeInfo* pUsedType = type_from_type_node(whatToUse.pIntrinsicValue);
-        if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+        if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_NAMESPACE]) {
+            Assert_(is_value_tc_only(whatToUse.pIntrinsicValue));
             if (!is_ctx_compound(pTCContext)) {
                 if (is_ctx_global(pTCContext)) {
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                        "'using' of struct-like at global scope is invalid");
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                        "Registration of a new namespace as 'using' in current namespace"), pTCContext->pWorker);
+
+                    i32 iNamespaceSourceFile; u32 uNamespaceRegistration;
+                    decode_namespace_id(whatToUse.pIntrinsicValue->info.metaValue.knownValue.uEmbeddedValue,
+                        &iNamespaceSourceFile, &uNamespaceRegistration);
+                    SourceFileDescAndState* pOrigSourceFile = pTCContext->pProgCompilationState->vecSourceFiles[u32(iNamespaceSourceFile)];
+                    TCNamespace* pOrigNamespace = pOrigSourceFile->vecNamespaces[uNamespaceRegistration];
+
+                    acquire_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
+                    if (!check_not_circular_using_from(pTCContext->pNamespace, pOrigNamespace, pTCContext->pWorker->tmpArena)) {
+                        release_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                            "'using' of this namespace here would create a circular using chain. This is fobidden.");
+                    }
+
+                    pTCContext->pNamespace->vecAllUsedNamespaces.append((ReferencedNamespace*)pOrigNamespace);
+                    if (pTCContext->eGlobalDeclScope < SCOPEKIND_GLOBAL_PRIVATE)
+                        pTCContext->pNamespace->vecAccessibleUsedNamespaces.append((ReferencedNamespace*)pOrigNamespace);
+
+                    u64 uCurrentNamespaceId = get_namespace_id((ReferencedNamespace*)pTCContext->pNamespace);
+                    //acquire_write_laggued_state_lock(pOrigSourceFile, pTCContext);
+                    pOrigNamespace->mapOthersUsingThis.insert(uCurrentNamespaceId, (ReferencedNamespace*)pTCContext->pNamespace);
+                    //release_write_laggued_state_lock(pOrigSourceFile, pTCContext);
+                    release_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
+                    return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
                 } else {
                     Assert_(is_ctx_regular_proc_body(pTCContext));
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                        "'using' of struct-like within proc-body is invalid");
+                    // TODO
+                    return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                        "'using' of namespace-like within proc-body not yet implemented");
                 }
             } else { Assert_(is_ctx_compound(pTCContext));
                 Assert_(pTCContext->pCompoundToTC);
                 if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
                     return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                        "'using' of struct-like within another struct-like is invalid. Did you intend 'including' ?");
+                        "'using' of namespace within a struct-like is invalid.");
                 } else { Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM);
                     return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                        "'using' of struct-like within enum is invalid.");
+                        "'using' of namespace within enum is invalid.");
                 }
             }
-        } else if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_ENUM) {
-            if (!is_ctx_compound(pTCContext)) {
-                if (is_ctx_global(pTCContext)) {
-                    // TODO
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                        "'using' of enum at global scope not yet implemented");
-                } else {
-                    Assert_(is_ctx_regular_proc_body(pTCContext));
-                    // TODO
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                        "'using' of enum within proc-body not yet implemented");
-                }
-            } else { Assert_(is_ctx_compound(pTCContext));
-                Assert_(pTCContext->pCompoundToTC);
-                if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM) {
-                    TypeInfo_Enum* pAsCurrentEnum = (TypeInfo_Enum*)pTCContext->pCompoundToTC->pCompoundType;
-                    const TypeInfo_Enum* pAsEnumToUSe = (const TypeInfo_Enum*)pUsedType;
-                    if (!are_types_same(pAsCurrentEnum->pBaseType, pAsEnumToUSe->pBaseType, pTCContext)) {
+        } else if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
+            const TypeInfo* pUsedType = type_from_type_node(whatToUse.pIntrinsicValue);
+            if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                if (!is_ctx_compound(pTCContext)) {
+                    if (is_ctx_global(pTCContext)) {
                         return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                            "'using' of enum with a distinct base type is forbidden");
-                    }
-                    if (!is_compound_type_full_typechecked(pAsEnumToUSe)) {
-                        return add_waiting_task_for_compound_body(pAsEnumToUSe, pMainNode->uNodeIndexInStatement, pTCContext);
-                    } else if (pAsEnumToUSe->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
+                            "'using' of struct-like at global scope is invalid");
+                    } else {
+                        Assert_(is_ctx_regular_proc_body(pTCContext));
                         return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                            "'using' of enum which is in error");
+                            "'using' of struct-like within proc-body is invalid");
                     }
-                    // Note: we do *not* need to check if not circular here... since we typecheck enum bodies *sequentially*
-                    // TODO: check if not already present ?
-                    // TODO: check right now if there are any conflicts with existing identifiers ?
-                    pAsCurrentEnum->vecUsed.append(pAsEnumToUSe);
-                    if (pAsEnumToUSe->pLastValue) {
-                        pAsCurrentEnum->pLastValue = pAsEnumToUSe->pLastValue;
+                } else { Assert_(is_ctx_compound(pTCContext));
+                    Assert_(pTCContext->pCompoundToTC);
+                    if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                        // TODO: allow some 'using' syntax for integrating only those *constants* there ???
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                            "'using' of struct-like within another struct-like is invalid. Did you intend 'including' ?");
+                    } else { Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM);
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                            "'using' of struct-like within enum is invalid.");
                     }
-                    return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
-                } else {
-                    // TODO: CLEANUP: THOUGHTS: ... or maybe allow that ???
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                        "'using' of enum within struct-like is invalid");
                 }
-            }
-        } // otherwise fallthrough
-    }
+            } else if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_ENUM) {
+                if (!is_ctx_compound(pTCContext)) {
+                    if (is_ctx_global(pTCContext)) {
+                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                            "Registration of a new enum as 'using' in current namespace"), pTCContext->pWorker);
+                        
+                        pTCContext->pNamespace->vecAllUsedEnums.append((const TypeInfo_Enum*)pUsedType);
+                        if (pTCContext->eGlobalDeclScope < SCOPEKIND_GLOBAL_PRIVATE)
+                            pTCContext->pNamespace->vecAccessibleUsedEnums.append((const TypeInfo_Enum*)pUsedType);
+                        return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+
+                    } else {
+                        Assert_(is_ctx_regular_proc_body(pTCContext));
+                        // TODO
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                            "'using' of enum within proc-body not yet implemented");
+                    }
+                } else { Assert_(is_ctx_compound(pTCContext));
+                    Assert_(pTCContext->pCompoundToTC);
+                    if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM) {
+                        TypeInfo_Enum* pAsCurrentEnum = (TypeInfo_Enum*)pTCContext->pCompoundToTC->pCompoundType;
+                        const TypeInfo_Enum* pAsEnumToUSe = (const TypeInfo_Enum*)pUsedType;
+                        if (!are_types_same(pAsCurrentEnum->pBaseType, pAsEnumToUSe->pBaseType, pTCContext)) {
+                            // TODO: some could still be acceptable conversions ?
+                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                                "'using' of enum with a distinct base type is forbidden");
+                        }
+                        if (!is_compound_type_full_typechecked(pAsEnumToUSe)) {
+                            return add_waiting_task_for_compound_body(pAsEnumToUSe, pMainNode->uNodeIndexInStatement, pTCContext);
+                        } else if (pAsEnumToUSe->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
+                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                                "'using' of enum which is in error");
+                        }
+                        // Note: we do *not* need to check if not circular here... since we typecheck enum bodies *sequentially*
+                        // TODO: check if not already present ?
+                        // TODO: check right now if there are any conflicts with existing identifiers ?
+                        pAsCurrentEnum->vecUsed.append(pAsEnumToUSe);
+                        if (pAsEnumToUSe->pLastValue) {
+                            pAsCurrentEnum->pLastValue = pAsEnumToUSe->pLastValue;
+                        }
+                        return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+                    } else {
+                        // TODO: CLEANUP: THOUGHTS: ... or maybe allow that ???
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                            "'using' of enum within struct-like is invalid");
+                    }
+                }
+            } // otherwise fallthrough
+        }
     
-    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-        "invalid expression after 'using'. Expected namespace, or enum.");
+        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+            "invalid expression after 'using'. Expected namespace, or enum.");
+    
+    } else { Assert_(uKey == ETOK_INCLUDING);
+        
+        if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
+            const TypeInfo* pUsedType = type_from_type_node(whatToUse.pIntrinsicValue);
+            if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+
+                if (is_ctx_compound(pTCContext)) {
+                    Assert_(pTCContext->pCompoundToTC);
+                    if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                    
+                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                            "Registration of a structlike as an included aggregate in current structlike"), pTCContext->pWorker);
+                        // TODO
+                        return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
+                            "Registration of a structlike as an included aggregate in current structlike : not yet implemented");
+
+                    } // Otherwise fallthrough
+                } // Otherwise fallthrough
+
+                return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                    "'including' a struct-like not supported in that context. It is meant to aggregate struct-likes within other struct-likes.");
+
+            } // Otherwise fallthrough
+        } // Otherwise fallthrough
+
+        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+            "invalid expression after 'including'. Expected struct-like type.");
+    }
 }
 
 local_func void set_global_binding_in_error(int iIdentifierHandle, u64 uHash,
@@ -3519,8 +2416,7 @@ local_func ETCResult set_declaration_in_error(TmpTCNode* tAllDeclLhv, u8 uDeclLh
         bIsConstant ? reinterpret_cast<u64>("const") : reinterpret_cast<u64>("variable"), u64(uDeclLhvNodeCount)), pTCContext->pWorker);
 
     EDeclAttributes declAttr = bIsConstant ? EDeclAttributes::EDECLATTR_REGULAR_CONST : EDeclAttributes::EDECLATTR_REGULAR_VAR;
-    bool bDeclareLocally = does_tc_ctx_require_declare_as_local(pTCContext, declAttr);
-    if (!bDeclareLocally) {
+    if (is_ctx_global(pTCContext)) {
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
             "Bindings are global => emitting actual bindings in error"), pTCContext->pWorker);
         for (u8 uDecl = 0; uDecl < uDeclLhvNodeCount; uDecl++) {
@@ -3529,9 +2425,8 @@ local_func ETCResult set_declaration_in_error(TmpTCNode* tAllDeclLhv, u8 uDeclLh
             if (pDecl->pIntrinsicValue->pType != 0) { // if type is 0, is a sink => no check
                 int iIdentifierHandle = get_id_from_decl_node(pDecl, pTCStatement);
                 u64 uHash = get_map_hash(iIdentifierHandle);
-                ValueBinding* bAlreadyFound = tc_find_binding_from_identifier_within_namespace(
-                    (ReferencedNamespace*)pTCContext->pNamespace, pTCContext, iIdentifierHandle, uHash,
-                    EIdentAttributes::EIDENTATTR_REGULAR);
+                ValueBinding* bAlreadyFound = find_binding_within_namespace(iIdentifierHandle, uHash,
+                    (ReferencedNamespace*)pTCContext->pNamespace, false, pTCContext);
                 if (!bAlreadyFound) { // if already found, we'll here have an already found error, but we'll not force that
                                       //   existing binding to be modified. This may make different schedules produce different error-results
                                       //   for a same source, maybe (TODO: CLEANUP ?) but we'll only register the *new* ones as in error
@@ -3578,19 +2473,34 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
     if (checkDeclLhv == ETCResult::ETCR_SUCCESS) {
         Assert_(uDeclLhvNodeCount); // otherwise checkDeclLhv should not have been success
         EDeclAttributes declAttr = bIsConstant ? EDeclAttributes::EDECLATTR_REGULAR_CONST : EDeclAttributes::EDECLATTR_REGULAR_VAR;
-        bool bDeclareLocally = does_tc_ctx_require_declare_as_local(pTCContext, declAttr);
-        bool bAllowShadowingOfLocals = bDeclareLocally ? does_tc_ctx_allow_shadowing_locals(pTCContext, declAttr) : false;
+        bool bDeclareAsProcLocal = false;
+        bool bDeclareAsStructLike = false;
+        if (pTCContext->pProcSource)
+            bDeclareAsProcLocal = true;
+        else if (is_ctx_compound(pTCContext)) {
+            Assert_(pTCContext->pCompoundToTC);
+            Assert_(pTCContext->pCompoundToTC->pCompoundType);
+            Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE); // enums ruled out at this point
+            bDeclareAsStructLike = true;
+        }
+        bool bAllowShadowingOfLocals = bDeclareAsProcLocal ? does_tc_ctx_allow_shadowing_locals(pTCContext, declAttr) : false;
         bool bAllowShadowingOfGlobals = does_tc_ctx_allow_shadowing_globals(pTCContext, declAttr);
-        const TypeInfo_ProcLike* pProcSign = is_ctx_with_proc_source(pTCContext) ? pTCContext->pProcSource->procSign : 0;
-        SourceFileDescAndState* pGlobalDeclFile = get_tc_global_declaration_file(pTCContext, declAttr);
+        SourceFileDescAndState* pGlobalDeclFile = pTCContext->pIsolatedSourceFile;
         int allIds[32]; Assert_(uDeclLhvNodeCount <= 32u);
+        
+        //
+        // Checking now if identifier is okay. That is, not yet used for another binding which could conflict within current context
+        //
+
         for (u8 uDecl = 0; uDecl < uDeclLhvNodeCount; uDecl++) {
+
             TmpTCNode* pDecl = tAllDeclLhv + uDecl;
             Assert_(is_node_already_typechecked(pDecl->pTCNode));
             if (pDecl->pIntrinsicValue->pType != 0) { // if type is 0, is a sink => no check
 
                 int iIdentifierHandle = get_id_from_decl_node(pDecl, pTCStatement);
 
+                // Checking that no identifier used twice in same declaration statement
                 for (u8 uPrevious = 0; uPrevious < uDecl; uPrevious++) {
                     if (allIds[uPrevious] == iIdentifierHandle) {
                         emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
@@ -3603,57 +2513,53 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
 
                 u64 uHash = get_map_hash(iIdentifierHandle);
 
-                if (bDeclareLocally) {
-                    Assert_(has_ctx_decl_blocks(pTCContext));
-                    TCDeclSourceBlock* pCurrentBlock = (TCDeclSourceBlock*)pTCContext->pCurrentBlock;
-                    do {
-                        TmpMap<int, u32>* pMapLocalDeclsById = pCurrentBlock->pMapBlockDeclarationsById;
-                        auto itFoundLocal = pMapLocalDeclsById->findHashed(uHash, iIdentifierHandle);
-                        if (itFoundLocal != pMapLocalDeclsById->end()) {
-                            emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
-                                "typecheck_declaration_statement() : already declared identifier (at local scope)");
-                            return set_declaration_in_error(tAllDeclLhv, uDeclLhvNodeCount, pMainNode,
-                                bIsConstant, pTCStatement, pTCContext);
-                        }
-                        pCurrentBlock = bAllowShadowingOfLocals ? 0 : (TCDeclSourceBlock*)pCurrentBlock->pParentBlock;
-                    } while (pCurrentBlock);
-
-                    if (pProcSign) {
-                        u8 uTotalCount = get_total_param_count(pProcSign);
-                        for (u8 uParam = 0; uParam < uTotalCount; uParam++) {
-                            const ProcLikeParam* pParam = pProcSign->params.cat(uParam);
-                            if (iIdentifierHandle == pParam->iIdentifier) {
-                                emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
-                                    "typecheck_declaration_statement() : already declared identifier (as proc param)");
-                                return set_declaration_in_error(tAllDeclLhv, uDeclLhvNodeCount, pMainNode,
-                                    bIsConstant, pTCStatement, pTCContext);
-                            }
-                        }
-                    }
-                }
-
-                if (!bAllowShadowingOfGlobals || !bDeclareLocally) {
-                    ValueBinding* bAlreadyFound = tc_find_binding_from_identifier_within_namespace(
-                        (ReferencedNamespace*)pTCContext->pNamespace, pTCContext, iIdentifierHandle, uHash,
-                        EIdentAttributes::EIDENTATTR_REGULAR);
-                    if (bAlreadyFound) {
+                if (bDeclareAsProcLocal) {
+                    // Checking that identifier is not already defined at same local scope,
+                    //   or any other local parent if not explicitely allowed to shadow
+                    ValueBinding* pAlreadyFoundLocally = find_binding_within_proclocal(iIdentifierHandle, uHash,
+                        !bAllowShadowingOfLocals, pTCContext);
+                    if (pAlreadyFoundLocally) {
                         emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
-                            "typecheck_declaration_statement() : already declared identifier (at global scope)");
+                            "typecheck_declaration_statement() : already declared identifier (at local scope)");
+                        return set_declaration_in_error(tAllDeclLhv, uDeclLhvNodeCount, pMainNode,
+                            bIsConstant, pTCStatement, pTCContext);
+                    }
+                } else if (bDeclareAsStructLike) {
+                    // Checking that identifier is not already defined within members of same structlike
+                    u32 uUnusedOffset; bool bUnusedAligned;
+                    ValueBinding* pAlreadyFoundMember = find_binding_within_structlike(iIdentifierHandle, uHash,
+                        (const TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType, &uUnusedOffset, &bUnusedAligned);
+                    if (pAlreadyFoundMember) {
+                        emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                            "typecheck_declaration_statement() : already declared identifier (in same structlike)");
                         return set_declaration_in_error(tAllDeclLhv, uDeclLhvNodeCount, pMainNode,
                             bIsConstant, pTCStatement, pTCContext);
                     }
                 }
 
-                if (!bAllowShadowingOfGlobals && (bDeclareLocally || is_ctx_compound(pTCContext))) {
-                    u64 uCurrentNamespaceId = get_namespace_id((ReferencedNamespace*)pTCContext->pNamespace);
-                    auto itFound = pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.find(uCurrentNamespaceId);
-                    if (itFound == pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.end()) {
-                        TmpSet<int> newSetForThisNamespace;
-                        newSetForThisNamespace.init(FireAndForgetArenaAlloc(pTCContext->pIsolatedSourceFile->localArena));
-                        itFound = pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.insert_not_present(
-                            get_map_hash(uCurrentNamespaceId), uCurrentNamespaceId, newSetForThisNamespace);
+                if (!bAllowShadowingOfGlobals) {
+                    // Checking that identifier is not already defined within globals, if not allowed to shadow globals
+                    ValueBinding* pAlreadyFoundGlobal = find_binding_within_namespace(iIdentifierHandle, uHash,
+                        (ReferencedNamespace*)pTCContext->pNamespace, true, pTCContext);
+                    if (pAlreadyFoundGlobal) {
+                        emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                            "typecheck_declaration_statement() : already declared identifier (at global scope)");
+                        return set_declaration_in_error(tAllDeclLhv, uDeclLhvNodeCount, pMainNode,
+                            bIsConstant, pTCStatement, pTCContext);
                     }
-                    itFound.value().insertHashed(uHash, iIdentifierHandle);
+                    // Moreover adding those to a set of identifiers which may be checked for shadowing against globals *after the fact*
+                    //   ... since we allow out of order declarations. Ofc. Why try simple.
+                    if (bDeclareAsProcLocal || bDeclareAsStructLike) {
+                        u64 uCurrentNamespaceId = get_namespace_id((ReferencedNamespace*)pTCContext->pNamespace);
+                        auto itFound = pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.find(uCurrentNamespaceId);
+                        if (itFound == pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.end()) {
+                            TmpSet<int> newSetForThisNamespace;
+                            newSetForThisNamespace.init(FireAndForgetArenaAlloc(pTCContext->pIsolatedSourceFile->localArena));
+                            itFound = pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.insert_not_present(
+                                get_map_hash(uCurrentNamespaceId), uCurrentNamespaceId, newSetForThisNamespace);
+                        }
+                        itFound.value().insertHashed(uHash, iIdentifierHandle);
+                    } 
                 }
 
             } else {
@@ -3838,8 +2744,8 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
 
             u32 uValueNodeIndex = pRhvCanBeTypeAndValue->ast.uSecondaryChildNodeIndex;
             Assert_(uValueNodeIndex != INVALID_NODE_INDEX);
-            EExpectedExpr eValueExpectation = does_tc_ctx_require_declare_as_local(pTCContext, EDeclAttributes::EDECLATTR_REGULAR_VAR) ?
-                EExpectedExpr::EXPECT_REGULAR : EExpectedExpr::EXPECT_CONSTANT;  // global variables shall have constant initial value
+            // global variables shall have constant initial value
+            EExpectedExpr eValueExpectation = is_ctx_global(pTCContext) ? EExpectedExpr::EXPECT_CONSTANT : EExpectedExpr::EXPECT_REGULAR;
             ETCResult checkValueRhv = typecheck_possible_expr_list(uValueNodeIndex,
                 pTCStatement, pTCContext, eValueExpectation,
                 true, tAllValuesRhv, &uValueRhvNodeCount, tAllTypesForUpwardsInference, uTypeRhvNodeCount);

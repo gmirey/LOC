@@ -515,6 +515,7 @@ local_func TCBaseSourceBlock* tc_alloc_and_init_base_block(u32 uAstBlockIndex, u
     return pResult;
 }
 
+/*
 local_func TCDeclSourceBlock* tc_alloc_and_init_decl_block(u32 uAstBlockIndex,
     TCBaseSourceBlock* pParentBlock, TCContext* pTCContext, bool bAvoidChangingScope = false)
 {
@@ -525,14 +526,23 @@ local_func TCDeclSourceBlock* tc_alloc_and_init_decl_block(u32 uAstBlockIndex,
     if (bAvoidChangingScope) {
         Assert_(pParentBlock);
         pResult->pMapBlockDeclarationsById = ((TCDeclSourceBlock*)pParentBlock)->pMapBlockDeclarationsById;
+        pResult->pVecUsedNamespace = ((TCDeclSourceBlock*)pParentBlock)->pVecUsedNamespace;
+        pResult->pVecUsedEnums = ((TCDeclSourceBlock*)pParentBlock)->pVecUsedEnums;
     } else {
         FireAndForgetArenaAlloc localAlloc(pSourceFile->localArena);
         pResult->pMapBlockDeclarationsById = (TmpMap<int, u32>*)alloc_from(pSourceFile->localArena,
             sizeof(TmpMap<int, u32>), alignof(TmpMap<int, u32>));
         pResult->pMapBlockDeclarationsById->init(localAlloc);
+        pResult->pVecUsedNamespace = (TmpArray<ReferencedNamespace*>*)alloc_from(pSourceFile->localArena,
+            sizeof(TmpArray<ReferencedNamespace*>), alignof(TmpArray<ReferencedNamespace*>));
+        pResult->pVecUsedNamespace->init(pSourceFile->localArena);
+        pResult->pVecUsedEnums = (TmpArray<const TypeInfo_Enum*>*)alloc_from(pSourceFile->localArena,
+            sizeof(TmpArray<const TypeInfo_Enum*>), alignof(TmpArray<const TypeInfo_Enum*>));
+        pResult->pVecUsedEnums->init(pSourceFile->localArena);
     }
     return pResult;
 }
+*/
 
 local_func TCSeqSourceBlock* tc_alloc_and_init_seq_block(u32 uAstBlockIndex,
     TCSeqSourceBlock* pParentBlock, u32 uStatementInParentBlock, TCContext* pTCContext, bool bAvoidChangingScope = false)
@@ -540,22 +550,16 @@ local_func TCSeqSourceBlock* tc_alloc_and_init_seq_block(u32 uAstBlockIndex,
     SourceFileDescAndState* pSourceFile = pTCContext->pIsolatedSourceFile;
     TCSeqSourceBlock* pResult = (TCSeqSourceBlock*)alloc_from(pSourceFile->localArena,
         sizeof(TCSeqSourceBlock), alignof(TCSeqSourceBlock));
+    Assert_(pTCContext->pProcResult);
     init_base_block(pResult, uAstBlockIndex, pParentBlock, pTCContext);
     if (bAvoidChangingScope) {
         Assert_(pParentBlock);
-        pResult->pMapBlockDeclarationsById = pParentBlock->pMapBlockDeclarationsById;
-        pResult->pVecDeferredBlocksInDeclOrder = pParentBlock->pVecDeferredBlocksInDeclOrder;
         pResult->pVecPlaceholdersToAfterBlockAndAfterElses = pParentBlock->pVecPlaceholdersToAfterBlockAndAfterElses;
         pResult->pVecPlaceholdersToElse = pParentBlock->pVecPlaceholdersToElse;
         pResult->uIRBeforeLoopConditionIfBlockIsLoop = pParentBlock->uIRBeforeLoopConditionIfBlockIsLoop;
+        pResult->uFlagsAndScopeBaseIndex = 
+            (pParentBlock->uFlagsAndScopeBaseIndex & BLOCK_SCOPED_ENTITY_BASE_INDEX_MASK) | BLOCKFLAG_IS_NON_SCOPING;
     } else {
-        FireAndForgetArenaAlloc localAlloc(pSourceFile->localArena);
-        pResult->pMapBlockDeclarationsById = (TmpMap<int, u32>*)alloc_from(pSourceFile->localArena,
-            sizeof(TmpMap<int, u32>), alignof(TmpMap<int, u32>));
-        pResult->pMapBlockDeclarationsById->init(localAlloc);
-        pResult->pVecDeferredBlocksInDeclOrder = (TmpArray<TCSeqSourceBlock*>*)alloc_from(pSourceFile->localArena,
-            sizeof(TmpArray<TCSeqSourceBlock*>), alignof(TmpArray<TCSeqSourceBlock*>));
-        pResult->pVecDeferredBlocksInDeclOrder->init(pSourceFile->localArena);
         if (pParentBlock) {
             pResult->pVecPlaceholdersToAfterBlockAndAfterElses = (TmpArray<u32>*)alloc_from(pSourceFile->localArena,
                 sizeof(TmpArray<u32>), alignof(TmpArray<u32>));
@@ -565,10 +569,10 @@ local_func TCSeqSourceBlock* tc_alloc_and_init_seq_block(u32 uAstBlockIndex,
         }
         pResult->pVecPlaceholdersToElse = 0;
         pResult->uIRBeforeLoopConditionIfBlockIsLoop = 0u;
+        pResult->uFlagsAndScopeBaseIndex = pTCContext->pProcResult->vecScopedEntities.size();
     }
     pResult->uIROfAfterBlock = 0u;
     pResult->uIndexOfParentStatementInParentBlock = uStatementInParentBlock;
-    pResult->uKindFlagsOfParentStatement = 0u;
     return pResult;
 }
 
@@ -579,9 +583,9 @@ local_func TCBaseSourceBlock* init_new_child_block_of_pan_from_tagged(u64 uTagge
     if (has_ctx_seq_blocks(pTCContext)) {
         return tc_alloc_and_init_seq_block(uAstBlockIndex, (TCSeqSourceBlock*)pTCContext->pCurrentBlock,
             pTCContext->pCurrentBlock->uStatementBeingTypechecked, pTCContext, true); // last *true* to avoid affecting local scope
-    } else if (has_ctx_decl_blocks(pTCContext)) {
+    } /* else if (has_ctx_decl_blocks(pTCContext)) {
         return tc_alloc_and_init_decl_block(uAstBlockIndex, pTCContext->pCurrentBlock, pTCContext, true);
-    } else {
+    }*/ else {
         return tc_alloc_and_init_base_block(uAstBlockIndex, pTCContext->pCurrentBlock->_uScopeLevelIffGlobal,
             pTCContext->pCurrentBlock, pTCContext);
     }

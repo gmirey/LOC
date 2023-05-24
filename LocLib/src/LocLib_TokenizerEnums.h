@@ -177,12 +177,14 @@ local_func_inl bool is_token_symbol_or_keyword(ETokenKind eKind) { return (eKind
     KEYWORD("comptime_func", COMPTIMEFUNC,) \
     KEYWORD("enum", ENUM,) \
     KEYWORD("struct", STRUCT,) \
+    KEYWORD("packed_struct", PACKED_STRUCT,) \
     KEYWORD("view", VIEW,) \
     KEYWORD("union", UNION,) \
     KEYWORD("hset", HSET,) \
     KEYWORD("hdic", HDIC,) \
         \
 	KEYWORD("using", USING,) \
+	KEYWORD("including", INCLUDING,) \
 	KEYWORD("static", STATIC,) /* reserved, but not currently in grammar */ \
 	KEYWORD("dynamic", DYNAMIC,) /* reserved, but not currently in grammar */ \
     KEYWORD("distinct", DISTINCT,) \

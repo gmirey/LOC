@@ -151,8 +151,10 @@ struct SourceFileDescAndState {
         ioToInit->mapPublicDeclarationsById.init(sfsFFAlloc);
         ioToInit->mapAccessibleDeclarationsById.init(sfsFFAlloc);
         ioToInit->mapAllGlobalDeclarationsById.init(sfsFFAlloc);
-        ioToInit->vecUsedNamespaces.init(localArena);
-        ioToInit->vecUsedEnums.init(localArena);
+        ioToInit->vecAllUsedNamespaces.init(localArena);
+        ioToInit->vecAllUsedEnums.init(localArena);
+        ioToInit->vecAccessibleUsedNamespaces.init(localArena);
+        ioToInit->vecAccessibleUsedEnums.init(localArena);
         ioToInit->setOfNewlyDeclaredGlobalIdentifiers.init(sfsFFAlloc);
         ioToInit->mapOthersUsingThis.init(sfsFFAlloc);
         ioToInit->uCountGlobalTasksInTasksToLaunch = 0u;
@@ -279,10 +281,10 @@ local_func void write_namespace_to_self_lagged_state_while_under_lock(TCNamespac
     }
 
     if (bWriteRefs) {
-        Assert_(pNamespace->vecUsedNamespaces.size() >= pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
-        if (pNamespace->vecUsedNamespaces.size() > pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size()) {
+        Assert_(pNamespace->vecAccessibleUsedNamespaces.size() >= pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
+        if (pNamespace->vecAccessibleUsedNamespaces.size() > pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size()) {
             pNamespace->asRef.laggedState.vecKnownUsedNamespaces.init(laggedArena);
-            pNamespace->asRef.laggedState.vecKnownUsedNamespaces.append_all(pNamespace->vecUsedNamespaces);
+            pNamespace->asRef.laggedState.vecKnownUsedNamespaces.append_all(pNamespace->vecAccessibleUsedNamespaces);
             /*
             u32 uCount = pNamespace->vecUsedNamespaces.size();
             pNamespace->asRef.laggedState.vecKnownUsedNamespaces.reserve(uCount);
@@ -292,10 +294,10 @@ local_func void write_namespace_to_self_lagged_state_while_under_lock(TCNamespac
             }
             */
         }
-        Assert_(pNamespace->vecUsedEnums.size() >= pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
-        if (pNamespace->vecUsedEnums.size() > pNamespace->asRef.laggedState.vecKnownUsedEnums.size()) {
+        Assert_(pNamespace->vecAccessibleUsedEnums.size() >= pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
+        if (pNamespace->vecAccessibleUsedEnums.size() > pNamespace->asRef.laggedState.vecKnownUsedEnums.size()) {
             pNamespace->asRef.laggedState.vecKnownUsedEnums.init(laggedArena);
-            pNamespace->asRef.laggedState.vecKnownUsedEnums.append_all(pNamespace->vecUsedEnums);
+            pNamespace->asRef.laggedState.vecKnownUsedEnums.append_all(pNamespace->vecAccessibleUsedEnums);
         }
         Assert_(pNamespace->mapOthersUsingThis.size() >= pNamespace->asRef.laggedState.mapKnownOthersUsingThis.size());
         if (pNamespace->mapOthersUsingThis.size() > pNamespace->asRef.laggedState.mapKnownOthersUsingThis.size()) {
@@ -304,8 +306,8 @@ local_func void write_namespace_to_self_lagged_state_while_under_lock(TCNamespac
         }
     } else {
         //Assert_(pNamespace->mapReferencedNamespaces.size() == pNamespace->asRef.laggedState.mapKnownReferencedNamespaces.size());
-        Assert_(pNamespace->vecUsedNamespaces.size() == pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
-        Assert_(pNamespace->vecUsedEnums.size() == pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
+        Assert_(pNamespace->vecAccessibleUsedNamespaces.size() == pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
+        Assert_(pNamespace->vecAccessibleUsedEnums.size() == pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
         Assert_(pNamespace->mapOthersUsingThis.size() == pNamespace->asRef.laggedState.mapKnownOthersUsingThis.size());
     }
 }
