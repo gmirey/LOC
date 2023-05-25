@@ -296,6 +296,8 @@ public_func_inl_decl u32 type_pun_from_float(float f) {
 // ************************************************************
 // defer macro
 // ************************************************************
+// Note: This version is probably derived from a clever implementation by gingerBill (c) 2015-2018... (gb.h library)
+//                                             also Marek Rusinowski (c) 2015 for the operator avoiding parens and leaving block-braces syntax
 
 // Note: we could include <utility> here just for 'std::forward'... but we'd rather not do that
 // => define those my_* template black-magic here, paraphrasing them ourselves.
