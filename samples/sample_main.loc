@@ -84,6 +84,14 @@ my_tuesday :: testenum.TUESDAY		// #if ... statements child further-indentation 
 teststruct :: struct
 	a as int
 	b :: 52
+	
+teststruct2 :: struct
+	including teststruct
+	c as int
+	d as u64
+	including union
+		_f as f64
+		_u as u64
 
 //---------------------------------------------------
 // Refresh contents of our color buffer to the window display

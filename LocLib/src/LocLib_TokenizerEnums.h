@@ -288,7 +288,7 @@ static_assert(COUNT_KEYWORDS <= 128, "too many keywords for current 8b payload s
     SYMBOL_PAYLOAD("/%",INT_QUOTIENT, ,          74u) /* integer-quotient from division between integers, truncated towards zero */ \
     SYMBOL_PAYLOAD("%%",INT_REMAINDER, ,         75u) /* rest of integer-division between integers (can be neg). different from % which is a towards-neg-infinity */ \
     SYMBOL_PAYLOAD("++",CONCAT, ,                76u) /* array-or-string concatenation operator */ \
-    SYMBOL_PAYLOAD("^%",BIT_XOR, ,               77u) /* bitwise Xor binop */ \
+    SYMBOL_PAYLOAD("",  _RESERVED_77, ,          77u) /* reserved, not yet in grammar */ \
     SYMBOL_PAYLOAD("..",RANGE_INCL, ,            78u) /* countable range-operator with included end */ \
     SYMBOL_PAYLOAD("..<", RANGE_EXCL, ,          79u) /* countable range-operator with excluded end */ \
         \
@@ -319,7 +319,7 @@ static_assert(COUNT_KEYWORDS <= 128, "too many keywords for current 8b payload s
     SYMBOL_PAYLOAD("&=",BIT_AND_ASSIGN, ,        102u) /* op-and-assign for bitwise and */ \
     SYMBOL_PAYLOAD("|=",BIT_OR_ASSIGN, ,         103u) /* op-and-assign for bitwise or */ \
         \
-    SYMBOL_PAYLOAD("^%=", BIT_XOR_ASSIGN, ,       104u) /* op-and-assign for bitwise Xor */ \
+    SYMBOL_PAYLOAD("~=",  BIT_XOR_ASSIGN, ,       104u) /* op-and-assign for bitwise xor */ \
     SYMBOL_PAYLOAD("<<=", LSH_ASSIGN, ,           105u) /* op-and-assign for left-shift */ \
     SYMBOL_PAYLOAD(">>=", RSH_ASSIGN, ,           106u) /* op-and-assign for right-shift */ \
     SYMBOL_PAYLOAD("**=", POW_ASSIGN, ,           107u) /* op-and-assign for pow */ \
@@ -343,7 +343,7 @@ static_assert(COUNT_KEYWORDS <= 128, "too many keywords for current 8b payload s
     SYMBOL_PAYLOAD("{", OPENING_CURLY, ,          u8('{')) /* starts declaration of struct literals */ \
     SYMBOL_PAYLOAD("|", PIPE, ,                   u8('|')) /* bitwise or binop */ \
     SYMBOL_PAYLOAD("}", CLOSING_CURLY, ,          u8('}')) /* ends declaration of struct or set literals */ \
-    SYMBOL_PAYLOAD("~", TILDE, ,                  u8('~')) /* bitwise not unop */ \
+    SYMBOL_PAYLOAD("~", TILDE, ,                  u8('~')) /* bitwise not unop, bitwise xor binop */ \
     SYMBOL_PAYLOAD("DEL",  DEL, ,                  127u) /* shall always stay 'reserved' */
 
 // Macro-magic... cf "A Note on enums-and-structs synchronization"
@@ -383,6 +383,7 @@ enum ETokenPayload : u8 {
     ETOK_BIT_AND = ETOK_AMPERSAND,
     ETOK_BIT_OR = ETOK_PIPE,
     ETOK_BIT_NOT = ETOK_TILDE,
+    ETOK_BIT_XOR = ETOK_TILDE,
 
     ETOK_BOOL_AND = ETOK_AND,
     ETOK_BOOL_OR = ETOK_OR,
@@ -401,6 +402,7 @@ enum ETokenPayload : u8 {
     ETOK_OPENING_STRUCT_LIT = ETOK_OPENING_CURLY,
 
     ETOK_SLICING = ETOK_COLON,
+
 };
 
 // Macro-magic... cf "A Note on enums-and-structs synchronization"

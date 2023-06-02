@@ -2201,6 +2201,118 @@ when_macro_start_again:
     }
 }
 
+local_func ValueBinding* check_no_double_inclusions_enum_in_base_namespace(const TypeInfo_Enum* pEnumToUse, ReferencedNamespace* pBaseNamespace, TCContext* pTCContext)
+{
+    u32 uCountDecls = pEnumToUse->vecAllMembers.size();
+    for (u32 uDecl = 0u; uDecl < uCountDecls; uDecl++) {
+        ValueBinding* pDeclBinding = pEnumToUse->vecAllMembers[uDecl];
+        ValueBinding* pAlreadyThere = find_binding_within_namespace(pDeclBinding->iIdentifierHandle,
+            get_map_hash(pDeclBinding->iIdentifierHandle), pBaseNamespace, false, pTCContext);
+        if (pAlreadyThere)
+            return pAlreadyThere;
+    }
+    u32 uCountUsed = pEnumToUse->vecUsed.size();
+    for (u32 uUsed = 0u; uUsed < uCountUsed; uUsed++) {
+        const TypeInfo_Enum* pUsed = pEnumToUse->vecUsed[uUsed];
+        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_base_namespace(pUsed, pBaseNamespace, pTCContext);
+        if (pAlreadyThere)
+            return pAlreadyThere;
+    }
+    return 0;
+}
+
+local_func ValueBinding* check_no_double_inclusions_enum_in_enum(const TypeInfo_Enum* pEnumToUse, const TypeInfo_Enum* pEnumInside, TCContext* pTCContext)
+{
+    u32 uCountDecls = pEnumToUse->vecAllMembers.size();
+    for (u32 uDecl = 0u; uDecl < uCountDecls; uDecl++) {
+        ValueBinding* pDeclBinding = pEnumToUse->vecAllMembers[uDecl];
+        ValueBinding* pAlreadyThere = find_binding_within_enum(pDeclBinding->iIdentifierHandle,
+            get_map_hash(pDeclBinding->iIdentifierHandle), pEnumInside);
+        if (pAlreadyThere)
+            return pAlreadyThere;
+    }
+    u32 uCountUsed = pEnumToUse->vecUsed.size();
+    for (u32 uUsed = 0u; uUsed < uCountUsed; uUsed++) {
+        const TypeInfo_Enum* pUsed = pEnumToUse->vecUsed[uUsed];
+        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_enum(pUsed, pEnumInside, pTCContext);
+        if (pAlreadyThere)
+            return pAlreadyThere;
+    }
+    return 0;
+}
+
+local_func ValueBinding* check_no_double_inclusions_enum_in_proclocal(const TypeInfo_Enum* pEnumToUse, TCContext* pTCContext)
+{
+    Assert_(pTCContext->pProcResult);
+    u32 uCountDecls = pEnumToUse->vecAllMembers.size();
+    for (u32 uDecl = 0u; uDecl < uCountDecls; uDecl++) {
+        ValueBinding* pDeclBinding = pEnumToUse->vecAllMembers[uDecl];
+        ValueBinding* pAlreadyThere = find_binding_within_proclocal(pDeclBinding->iIdentifierHandle,
+            get_map_hash(pDeclBinding->iIdentifierHandle), true, pTCContext);
+        if (pAlreadyThere)
+            return pAlreadyThere;
+    }
+    u32 uCountUsed = pEnumToUse->vecUsed.size();
+    for (u32 uUsed = 0u; uUsed < uCountUsed; uUsed++) {
+        const TypeInfo_Enum* pUsed = pEnumToUse->vecUsed[uUsed];
+        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_proclocal(pUsed, pTCContext);
+        if (pAlreadyThere)
+            return pAlreadyThere;
+    }
+    return 0;
+}
+
+
+local_func ValueBinding* check_no_double_inclusions_enum_in_current_namespace(const TypeInfo_Enum* pEnumToUse, TCContext* pTCContext)
+{
+    TCNamespace* pNamespace = pTCContext->pNamespace;
+    Assert_(pNamespace);
+    while (pNamespace) {
+        Assert_(pNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile);
+        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_base_namespace(pEnumToUse, (ReferencedNamespace*)pNamespace, pTCContext);
+        if (pAlreadyThere)
+            return pAlreadyThere;
+        pNamespace = pNamespace->pParent;
+    }
+    return 0;
+}
+
+local_func ValueBinding* check_no_double_inclusions_namespace_in_proclocal(ReferencedNamespace* pNamespaceToUse, TCContext* pTCContext)
+{
+    Assert_(pTCContext->pProcResult);
+    if (pNamespaceToUse->pOrigNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile) {
+        TCNamespace* pOrig = pNamespaceToUse->pOrigNamespace;
+        for (auto it = pOrig->mapAllGlobalDeclarationsById.begin(), itEnd = pOrig->mapAllGlobalDeclarationsById.end();
+             it != itEnd; it++)
+        {
+            int iIdentifier = it.first();
+            ValueBinding* pAlreadyThere = find_binding_within_proclocal(iIdentifier, get_map_hash(iIdentifier), true, pTCContext);
+            if (pAlreadyThere)
+                return pAlreadyThere;
+        }
+        u32 uCountUsedEnums = pOrig->vecAllUsedEnums.size();
+        for (u32 uUsed = 0u; uUsed < uCountUsedEnums; uUsed++) {
+            const TypeInfo_Enum* pUsedEnum = pOrig->vecAllUsedEnums[uUsed];
+            ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_proclocal(pUsedEnum, pTCContext);
+            if (pAlreadyThere)
+                return pAlreadyThere;
+        }
+        u32 uCountUsedNamespaces = pOrig->vecAllUsedNamespaces.size();
+        for (u32 uUsed = 0u; uUsed < uCountUsedNamespaces; uUsed++) {
+            ReferencedNamespace* pUsedNamespace = pOrig->vecAllUsedNamespaces[uUsed];
+            ValueBinding* pAlreadyThere = check_no_double_inclusions_namespace_in_proclocal(pUsedNamespace, pTCContext);
+            if (pAlreadyThere)
+                return pAlreadyThere;
+        }
+
+    } else {
+        // TODO !!
+
+    }
+
+    return 0;
+}
+
 local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement* pTCStatement, TCContext* pTCContext)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
@@ -2223,16 +2335,23 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
 
         if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_NAMESPACE]) {
             Assert_(is_value_tc_only(whatToUse.pIntrinsicValue));
+            i32 iNamespaceSourceFile; u32 uNamespaceRegistration;
+            decode_namespace_id(whatToUse.pIntrinsicValue->info.metaValue.knownValue.uEmbeddedValue,
+                &iNamespaceSourceFile, &uNamespaceRegistration);
+            SourceFileDescAndState* pOrigSourceFile = pTCContext->pProgCompilationState->vecSourceFiles[u32(iNamespaceSourceFile)];
+            TCNamespace* pOrigNamespace = pOrigSourceFile->vecNamespaces[uNamespaceRegistration];
+
+            ValueBinding* foundDoubleInclusion = check_no_double_inclusions_namespace_generic((ReferencedNamespace*)pOrigNamespace, pTCContext);
+            if (foundDoubleInclusion) {
+                // TODO: report which
+                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                    "'using' of namespace here would result in name collisions");
+            }
+
             if (!is_ctx_compound(pTCContext)) {
                 if (is_ctx_global(pTCContext)) {
                     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                         "Registration of a new namespace as 'using' in current namespace"), pTCContext->pWorker);
-
-                    i32 iNamespaceSourceFile; u32 uNamespaceRegistration;
-                    decode_namespace_id(whatToUse.pIntrinsicValue->info.metaValue.knownValue.uEmbeddedValue,
-                        &iNamespaceSourceFile, &uNamespaceRegistration);
-                    SourceFileDescAndState* pOrigSourceFile = pTCContext->pProgCompilationState->vecSourceFiles[u32(iNamespaceSourceFile)];
-                    TCNamespace* pOrigNamespace = pOrigSourceFile->vecNamespaces[uNamespaceRegistration];
 
                     acquire_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
                     if (!check_not_circular_using_from(pTCContext->pNamespace, pOrigNamespace, pTCContext->pWorker->tmpArena)) {
@@ -2253,9 +2372,9 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
                     return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
                 } else {
                     Assert_(is_ctx_regular_proc_body(pTCContext));
-                    // TODO
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                        "'using' of namespace-like within proc-body not yet implemented");
+
+                    pTCContext->pProcResult->vecScopedEntities.append((ReferencedNamespace*)pOrigNamespace);
+                    return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
                 }
             } else { Assert_(is_ctx_compound(pTCContext));
                 Assert_(pTCContext->pCompoundToTC);
@@ -2291,44 +2410,70 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
                     }
                 }
             } else if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_ENUM) {
+                const TypeInfo_Enum* pAsUsedEnum = (const TypeInfo_Enum*)pUsedType;
+                if (!is_compound_type_full_typechecked(pAsUsedEnum)) {
+                    return add_waiting_task_for_compound_body(pAsUsedEnum, pMainNode->uNodeIndexInStatement, pTCContext);
+                } else if (pAsUsedEnum->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
+                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                        "'using' of enum which is in error");
+                }
                 if (!is_ctx_compound(pTCContext)) {
                     if (is_ctx_global(pTCContext)) {
                         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                             "Registration of a new enum as 'using' in current namespace"), pTCContext->pWorker);
-                        
-                        pTCContext->pNamespace->vecAllUsedEnums.append((const TypeInfo_Enum*)pUsedType);
+                        ValueBinding* foundDoubleInclusion = check_no_double_inclusions_enum_in_current_namespace(pAsUsedEnum, pTCContext);
+                        if (foundDoubleInclusion) {
+                            // TODO: report which
+                            return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                "'using' of enum in current namespace would result in name collisions");
+                        }
+
+                        pTCContext->pNamespace->vecAllUsedEnums.append(pAsUsedEnum);
                         if (pTCContext->eGlobalDeclScope < SCOPEKIND_GLOBAL_PRIVATE)
-                            pTCContext->pNamespace->vecAccessibleUsedEnums.append((const TypeInfo_Enum*)pUsedType);
+                            pTCContext->pNamespace->vecAccessibleUsedEnums.append(pAsUsedEnum);
                         return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
 
                     } else {
                         Assert_(is_ctx_regular_proc_body(pTCContext));
-                        // TODO
-                        return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                            "'using' of enum within proc-body not yet implemented");
+                        Assert_(pTCContext->pProcResult);
+                        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+                            "Registration of a new enum as 'using' in current proc scope"), pTCContext->pWorker);
+
+                        ValueBinding* foundDoubleInclusion = check_no_double_inclusions_enum_in_proclocal(pAsUsedEnum, pTCContext);
+                        if (!foundDoubleInclusion)
+                            foundDoubleInclusion = check_no_double_inclusions_enum_in_current_namespace(pAsUsedEnum, pTCContext);
+                        if (foundDoubleInclusion) {
+                            // TODO: report which
+                            return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                "'using' of enum at current proclocal scope would result in name collisions");
+                        }
+
+                        pTCContext->pProcResult->vecScopedEntities.append(make_scoped_entity(pAsUsedEnum));
+                        return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
                     }
                 } else { Assert_(is_ctx_compound(pTCContext));
                     Assert_(pTCContext->pCompoundToTC);
                     if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM) {
                         TypeInfo_Enum* pAsCurrentEnum = (TypeInfo_Enum*)pTCContext->pCompoundToTC->pCompoundType;
-                        const TypeInfo_Enum* pAsEnumToUSe = (const TypeInfo_Enum*)pUsedType;
-                        if (!are_types_same(pAsCurrentEnum->pBaseType, pAsEnumToUSe->pBaseType, pTCContext)) {
+                        if (!are_types_same(pAsCurrentEnum->pBaseType, pAsUsedEnum->pBaseType, pTCContext)) {
                             // TODO: some could still be acceptable conversions ?
                             return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
                                 "'using' of enum with a distinct base type is forbidden");
                         }
-                        if (!is_compound_type_full_typechecked(pAsEnumToUSe)) {
-                            return add_waiting_task_for_compound_body(pAsEnumToUSe, pMainNode->uNodeIndexInStatement, pTCContext);
-                        } else if (pAsEnumToUSe->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
-                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                                "'using' of enum which is in error");
+
+                        ValueBinding* foundDoubleInclusion = check_no_double_inclusions_enum_in_enum(pAsUsedEnum, pAsCurrentEnum, pTCContext);
+                        if (!foundDoubleInclusion)
+                            foundDoubleInclusion = check_no_double_inclusions_enum_in_current_namespace(pAsUsedEnum, pTCContext);
+                        if (foundDoubleInclusion) {
+                            // TODO: report which
+                            return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                "'using' of enum in current enum would result in name collisions");
                         }
+
                         // Note: we do *not* need to check if not circular here... since we typecheck enum bodies *sequentially*
-                        // TODO: check if not already present ?
-                        // TODO: check right now if there are any conflicts with existing identifiers ?
                         pAsCurrentEnum->vecUsed.append(pAsEnumToUSe);
-                        if (pAsEnumToUSe->pLastValue) {
-                            pAsCurrentEnum->pLastValue = pAsEnumToUSe->pLastValue;
+                        if (pAsUsedEnum->pLastValue) {
+                            pAsCurrentEnum->pLastValue = pAsUsedEnum->pLastValue;
                         }
                         return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
                     } else {
@@ -2346,18 +2491,35 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
     } else { Assert_(uKey == ETOK_INCLUDING);
         
         if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
-            const TypeInfo* pUsedType = type_from_type_node(whatToUse.pIntrinsicValue);
-            if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
-
+            const TypeInfo* pIncludedType = type_from_type_node(whatToUse.pIntrinsicValue);
+            if (get_type_kind(pIncludedType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                const TypeInfo_StructLike* pAsIncludedStructLike = (const TypeInfo_StructLike*)pIncludedType;
                 if (is_ctx_compound(pTCContext)) {
                     Assert_(pTCContext->pCompoundToTC);
                     if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
-                    
                         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                             "Registration of a structlike as an included aggregate in current structlike"), pTCContext->pWorker);
-                        // TODO
-                        return_error(pMainNode, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                            "Registration of a structlike as an included aggregate in current structlike : not yet implemented");
+
+                        if (!is_compound_type_full_typechecked(pAsIncludedStructLike)) {
+                            return add_waiting_task_for_compound_body(pAsIncludedStructLike, pMainNode->uNodeIndexInStatement, pTCContext);
+                        } else if (pAsIncludedStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
+                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                                "'including' of struct which is in error");
+                        }
+
+                        TypeInfo_StructLike* pTCedStructLike = (TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType;
+                        u32 uInclusionPos = pTCedStructLike->vecAllMembers.size();
+                        pTCedStructLike->vecIncluded.append(uInclusionPos);
+                        ValueBinding* pMockBinding = (ValueBinding*)alloc_from(pTCContext->pIsolatedSourceFile->localArena,
+                            sizeof(ValueBinding), alignof(ValueBinding));
+                        set_binding_source_ref(pMockBinding, pTCStatement, pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
+                        pMockBinding->iIdentifierHandle = -1;
+                        pMockBinding->pType = g_pCoreTypesInfo[ECORETYPE_TYPE];
+                        pMockBinding->info.uIRandMetaFlags = IRFLAG_TC_ONLY | IRFLAG_TC_SEMANTIC_CONST | IRFLAG_TC_BINDING_INSTANCE;
+                        pMockBinding->info.metaValue.knownValue.pType = pAsIncludedStructLike;
+                        pMockBinding->uCompoundDeclSort = pTCStatement->uBlockIndexInSourceFile << 5u;
+                        pTCedStructLike->vecAllMembers.append(pMockBinding);
+                        return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
 
                     } // Otherwise fallthrough
                 } // Otherwise fallthrough

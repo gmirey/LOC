@@ -339,8 +339,8 @@ static int cmpNonNullStringNoCaseASCII(StringView first, StringView second) {
     const u8* pF = first.start;
     const u8* pS = second.start;
     for (i64 i = 0; i < iMinSize; i++, pF++, pS++) { // scanning each char (pairwise at same index) from start to end...
-        u8 f = *pF; if (f >= 'A' && f <= 'Z') f |= 0x10; // lower-cases f (only if plain 7b ASCII, though)
-        u8 s = *pS; if (s >= 'A' && s <= 'Z') s |= 0x10; // lower-cases s (only if plain 7b ASCII, though)
+        u8 f = *pF; if (f >= 'A' && f <= 'Z') f |= 0x20; // lower-cases f (only if plain 7b ASCII, though)
+        u8 s = *pS; if (s >= 'A' && s <= 'Z') s |= 0x20; // lower-cases s (only if plain 7b ASCII, though)
         if (f < s) // as soon as one char with greater/lesser code than the other is found, we have an ordering
             return -1;
         else if (f > s)

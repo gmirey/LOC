@@ -460,7 +460,7 @@ typedef PreAstNode* SpeContinuationParsingProc_Sign (ParserParams& parserParams,
     PARSER_META(INT_QUOTIENT        , BINOP             , 7  ,               ,               ,               ,               ) \
     PARSER_META(INT_REMAINDER       , BINOP             , 7  ,               ,               ,               ,               ) \
     PARSER_META(CONCAT              , BINOP             , 5  ,               ,               ,               ,               ) \
-    PARSER_META(BIT_XOR             , BINOP             , 9  ,               ,               ,               ,               ) \
+    PARSER_META(_RESERVED_77        , 0                 , 0  ,               ,               ,               ,               ) \
     PARSER_META(RANGE_INCL          , BINOP             , 4  ,               ,               ,               ,               ) \
     PARSER_META(RANGE_EXCL          , BINOP             , 4  ,               ,               ,               ,               ) \
         \
@@ -515,7 +515,7 @@ typedef PreAstNode* SpeContinuationParsingProc_Sign (ParserParams& parserParams,
     PARSER_META(OPENING_CURLY       , EXPR_|SPE_B       , 0  , no_left_st_lit,               ,               ,         st_lit) \
     PARSER_META(BIT_OR              , BINOP             , 9  ,               ,               ,               ,               ) \
     PARSER_META(CLOSING_CURLY       , CUSTOM            , 0  ,               ,               ,               ,               ) \
-    PARSER_META(BIT_NOT             , UN_OP             , 0  ,               ,               ,               ,               ) \
+    PARSER_META(BIT_NOT             , UN_OP|BINOP       , 0  ,               ,               ,               ,               ) \
     PARSER_META(DEL                 , 0                 , 0  ,               ,               ,               ,               ) \
         \
     PARSER_META(OR                  , BINOP             , 2  ,               ,               ,               ,               ) \

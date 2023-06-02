@@ -513,9 +513,6 @@ bool LiteTokenizer::tokenize_potential_multi_symbol()
                     case u8('%'): iMultiSymbol = ESYMB_INT_REM_ASSIGN;
                         static_assert(static_strings_equal("%%=", tStandardPayloadsStr[ESYMB_INT_REM_ASSIGN]), "multisymbol decode mismatch");
                         break;
-                    case u8('^'): iMultiSymbol = ESYMB_BIT_XOR_ASSIGN;
-                        static_assert(static_strings_equal("^%=", tStandardPayloadsStr[ESYMB_BIT_XOR_ASSIGN]), "multisymbol decode mismatch");
-                        break;
                 }
             } else if (first == u8('>') && second == u8('>')) {
                 iMultiSymbol = ESYMB_RSH_ASSIGN;
@@ -584,6 +581,9 @@ bool LiteTokenizer::tokenize_potential_multi_symbol()
                 case u8('|'): iMultiSymbol = ESYMB_BIT_OR_ASSIGN;
                     static_assert(static_strings_equal("|=", tStandardPayloadsStr[ESYMB_BIT_OR_ASSIGN]), "multisymbol decode mismatch");
                     break;
+                case u8('~'): iMultiSymbol = ESYMB_BIT_XOR_ASSIGN;
+                    static_assert(static_strings_equal("~=", tStandardPayloadsStr[ESYMB_BIT_XOR_ASSIGN]), "multisymbol decode mismatch");
+                    break;
             }
         } else if (second == u8('%')) {
             switch(first) {
@@ -601,9 +601,6 @@ bool LiteTokenizer::tokenize_potential_multi_symbol()
                     break;
                 case u8('%'): iMultiSymbol = ESYMB_INT_REMAINDER;
                     static_assert(static_strings_equal("%%", tStandardPayloadsStr[ESYMB_INT_REMAINDER]), "multisymbol decode mismatch");
-                    break;
-                case u8('^'): iMultiSymbol = ESYMB_BIT_XOR;
-                    static_assert(static_strings_equal("^%", tStandardPayloadsStr[ESYMB_BIT_XOR]), "multisymbol decode mismatch");
                     break;
             }
         } else if (second == u8('>')) {
