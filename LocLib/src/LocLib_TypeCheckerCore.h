@@ -43,18 +43,6 @@
 #include <cstdio>
 #include <cstdlib>
 
-#define check_type_availability_may_return_wait_or_error(pType, pExpr, pTCStatement, pTCContext, msgStartIfErr) do { \
-    if (get_type_kind(pType) == ETYPEKIND_STRUCTLIKE) { \
-        const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pType; \
-        if (!is_structlike_type_footprint_available(pAsStructLike)) { \
-            return add_waiting_task_for_compound_body(pAsStructLike, pExpr->uNodeIndexInStatement, pTCContext); \
-        } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME) { \
-            return_error(pExpr, pTCStatement, pTCContext, CERR_COMPOUND_TYPE_IN_ERROR, \
-                msgStartIfErr " a struct-like base-type which happens to be in error"); \
-        } \
-    } \
-} while (0)
-
 // emits error **on 'pNode' token** (not necessarily corresponding to pTcNode, but should be in same statement) AND flags pTcNode as in error
 local_func void emit_error(TmpTCNode* pNode, TCStatement* pTcStatement, TCContext* pEvalContext, u16 uErrCode,
     const char* formatMsg, DisplayableCompilerEntity param1 = DCE_NONE,
@@ -118,41 +106,70 @@ local_func void emit_error(TmpTCNode* pNode, TCStatement* pTcStatement, TCContex
         return checkResult; \
 } while(0)
 
+#define check_structlike_footprint_availability_may_return_wait_or_error(pAsStructLike, pExpr, pTCStatement, pTCContext, msgStartIfErr) do { \
+    Assert_(get_type_kind(pAsStructLike) == ETYPEKIND_STRUCTLIKE); /* TODO:CLEANUP: what about distinct alias */ \
+    if (!is_structlike_type_footprint_available_otherwise_return_locked_for_wait_if_nonlocal(pAsStructLike, pTCContext)) { \
+        return add_waiting_task_for_compound_body_already_event_locked_iff_other_file(pAsStructLike, pExpr->uNodeIndexInStatement, pTCContext); \
+    } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME) { \
+        return_error(pExpr, pTCStatement, pTCContext, CERR_COMPOUND_TYPE_IN_ERROR, \
+            msgStartIfErr " a struct-like base-type which happens to be in error"); \
+    } \
+} while (0)
+
+#define check_type_footprint_availability_may_return_wait_or_error(pType, pExpr, pTCStatement, pTCContext, msgStartIfErr) do { \
+    if (get_type_kind(pType) == ETYPEKIND_STRUCTLIKE) { /* TODO:CLEANUP: what about distinct alias */ \
+        const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pType; \
+        check_structlike_footprint_availability_may_return_wait_or_error(pAsStructLike, pExpr, pTCStatement, pTCContext, msgStartIfErr); \
+    } \
+} while (0)
+
+#define check_compound_type_full_availability_may_return_wait_or_error(pAsCompound, pExpr, pTCStatement, pTCContext, msgStartIfErr) do { \
+    Assert_(is_compound_type(pAsCompound)); /* TODO:CLEANUP: what about distinct alias */ \
+    if (!is_compound_type_fully_typechecked_otherwise_return_locked_for_wait_if_nonlocal(pAsCompound, pTCContext)) { \
+        return add_waiting_task_for_compound_body_already_event_locked_iff_other_file(pAsCompound, pExpr->uNodeIndexInStatement, pTCContext); \
+    } else if (pAsCompound->_coreFlags & (COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME|COMPOUNDFLAG_BODY_IN_ERROR)) { \
+        return_error(pExpr, pTCStatement, pTCContext, CERR_COMPOUND_TYPE_IN_ERROR, \
+            msgStartIfErr " a compound base-type which happens to be in error"); \
+    } \
+} while (0)
+
+#define check_type_full_availability_may_return_wait_or_error(pType, pExpr, pTCStatement, pTCContext, msgStartIfErr) do { \
+    if (is_compound_type(pType)) { /* TODO:CLEANUP: what about distinct alias */ \
+        const TypeInfo_CompoundBase* pAsCompound = (const TypeInfo_CompoundBase*)pType; \
+        check_compound_type_full_availability_may_return_wait_or_error(pAsCompound, pExpr, pTCStatement, pTCContext, msgStartIfErr); \
+    } \
+} while (0)
+
+
 local_func_inl bool is_comptime_prefixed(AstNode* pNode) {
     return 0 != (pNode->uNodeKindAndFlags & ENODEKINDFLAG_IS_COMPTIME);
 }
 
-local_func ETCResult add_waiting_task_to(SourceFileDescAndState* pSourceFile, TCWaitingReason waitingReason,
-    u32 uNodeIndexWithWait, TCContext* pTCContext, bool bIfCompoundConstOnly = false)
+local_func void on_registered_new_waiting_task(TCContext* pTCContext)
 {
-    pTCContext->uNodeIndexWithWait = uNodeIndexWithWait;
-
-    acquire_source_file_specific_task_lock(pSourceFile, pTCContext->pWorker);
-
-    auto itThisReason = pSourceFile->mapWaitingTasksByReason.find(waitingReason);
-    if (itThisReason == pSourceFile->mapWaitingTasksByReason.end()) {
-        TmpArray<TCContext*> newArray;
-        newArray.init(FireAndForgetArenaAlloc(pSourceFile->localArena));
-        itThisReason = pSourceFile->mapWaitingTasksByReason.insert(waitingReason, newArray);
-    }
-    TmpArray<TCContext*>& vecWaitingTasks = itThisReason.value();
-    vecWaitingTasks.append(pTCContext);
-    if (pTCContext->eKind <= ETypecheckContextKind::ECTXKIND_GLOBAL_PRIVATE) {
-        Assert_(pTCContext->pNamespace);
-        pTCContext->pNamespace->uCountGlobalTasksInWaitingTasks += 1u;
-    }
-
-    if (is_ctx_compound(pTCContext)) {
-        Assert_(pTCContext->pCompoundToTC);
-        if (!bIfCompoundConstOnly)
-            pTCContext->pCompoundToTC->setWaitingPossiblyRuntime.insert(pTCContext);
+    if (is_ctx_global(pTCContext)) {
+        if (pTCContext->eKind == ETypecheckContextKind::ECTXKIND_GLOBAL_PRIVATE)
+            pTCContext->pNamespace->uCountGlobalPrivateTasks += 1u;
         else
-            pTCContext->pCompoundToTC->setWaitingConstOnly.insert(pTCContext);
+            pTCContext->pNamespace->uCountGlobalAccessibleTasks += 1u;
+
+    } else if (is_ctx_compound(pTCContext)) {
+        Assert_(pTCContext->pCompoundToTC);
+        Assert_(pTCContext->pCompoundToTC->pCompoundType);
+        if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+            if (pTCContext->uFlags & CTXFLAG_CURRENT_TC_STRUCTCONST)
+                pTCContext->pCompoundToTC->uCountEnsuredConstTasks += 1u;
+            else
+                pTCContext->pCompoundToTC->uCountPossiblyRuntimeTasks += 1u;
+        }
     }
 
-    release_source_file_specific_task_lock(pSourceFile, pTCContext->pWorker);
-
-    return ETCResult::ETCR_WAITING;
+    WholeProgramCompilationState* pCompState = pTCContext->pProgCompilationState;
+    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL9_VERBOSE, EventREPT_CUSTOM_HARDCODED(
+        "Inserting Task 0x%llx in the global wait-bookkeeper", reinterpret_cast<u64>(pTCContext)), pTCContext->pWorker);
+    acquire_global_waiting_task_lock(pCompState, pTCContext->pWorker);
+    pCompState->setOfTCWaitingTasks.insert(pTCContext);
+    release_global_waiting_task_lock(pCompState, pTCContext->pWorker);
 }
 
 local_func_inl TmpTCNode init_tmp_tc_node(u32 uNodeIndex, TCStatement* pTCStatement, TCContext* pEvalContext) {
@@ -400,26 +417,218 @@ local_func void recall_node_final_value_from_index(TmpTCNode* pNode, TCStatement
     } \
 } while(0)
 
-local_func ETCResult add_waiting_task_for_compound_body(const TypeInfo_CompoundBase* pAsCompound,
+local_func bool is_structlike_type_footprint_available_otherwise_return_locked_for_wait_if_nonlocal(
+    const TypeInfo_StructLike* pStructType, TCContext* pAskingContext)
+{
+    bool bReady = pStructType->pRegistration->uTCProgress >= ECOMPOUND_DONE_RUNTIME;
+    // Only if asking context is not from same file than the one holding responsibility for the compound status, do we need to lock or fence...
+    if (pAskingContext->pIsolatedSourceFile != pStructType->pRegistration->pSourceFile) {
+        // if we find it *not* ready, and in another file...
+        if (!bReady) {
+            // then, we need to take the other file's event lock...
+            acquire_source_file_specific_event_lock(pStructType->pRegistration->pSourceFile, pAskingContext->pWorker);
+            // ...AND recheck once locked.
+            bReady = pStructType->pRegistration->uTCProgress >= ECOMPOUND_DONE_RUNTIME;
+            if (bReady) { // If actually read ready after lock, we can unlock right away and return as-if ready...
+                release_source_file_specific_event_lock(pStructType->pRegistration->pSourceFile, pAskingContext->pWorker);
+                READ_FENCE();
+            } // Otherwise, we do *not* release the lock (caller should be prepared for this: it surely wants to be able to setup
+              //    a wait event *while still locked* before releasing it...
+        } else {
+            READ_FENCE(); // if in another file, and we read 'ready', we'll protect against some compiler or CPU trickeries between
+                          // reading that state and reading any 'contents' here, with that fence => all contents read from now on should
+                          // have been updated correctly as per-the (hopefully frozen) ready-state.
+        }
+    }
+    return bReady;
+}
+
+local_func bool is_compound_type_fully_typechecked_otherwise_return_locked_for_wait_if_nonlocal(
+    const TypeInfo_CompoundBase* pCompoundType, TCContext* pAskingContext)
+{
+    bool bReady = pCompoundType->pRegistration->uTCProgress == ECOMPOUND_DONE_ALL;
+    // Only if asking context is not from same file than the one holding responsibility for the compound status, do we need to lock or fence...
+    if (pAskingContext->pIsolatedSourceFile != pCompoundType->pRegistration->pSourceFile) {
+        // if we find it *not* ready, and in another file...
+        if (!bReady) {
+            // then, we need to take the other file's event lock...
+            acquire_source_file_specific_event_lock(pCompoundType->pRegistration->pSourceFile, pAskingContext->pWorker);
+            // ...AND recheck once locked.
+            bReady = pCompoundType->pRegistration->uTCProgress == ECOMPOUND_DONE_ALL;
+            if (bReady) { // If actually read ready after lock, we can unlock right away and return as-if ready...
+                release_source_file_specific_event_lock(pCompoundType->pRegistration->pSourceFile, pAskingContext->pWorker);
+                READ_FENCE();
+            } // Otherwise, we do *not* release the lock (caller should be prepared for this: it surely wants to be able to setup
+              //    a wait event *while still locked* before releasing it...
+        } else {
+            READ_FENCE(); // if in another file, and we read 'ready', we'll protect against some compiler or CPU trickeries between
+                          // reading that state and reading any 'contents' here, with that fence => all contents read from now on should
+                          // have been updated correctly as per-the (hopefully frozen) ready-state.
+        }
+    }
+    return bReady;
+}
+
+local_func bool is_local_namespace_fully_discovered(
+    TCNamespace* pNamespace, TCContext* pAskingContext)
+{
+    Assert_(pNamespace->pOriginalSourceFile == pAskingContext->pIsolatedSourceFile);
+    bool bReady = pNamespace->uTCProgress >= ESOURCE_COMP_STATE_DONE_ALL_DISCOVERY;
+    return bReady;
+}
+
+local_func bool is_non_local_namespace_fully_discovered_otherwise_return_locked_for_wait(
+    TCNamespace* pNamespace, TCContext* pAskingContext)
+{
+    Assert_(pNamespace->pOriginalSourceFile != pAskingContext->pIsolatedSourceFile);
+    bool bReady = pNamespace->uTCProgress >= ESOURCE_COMP_STATE_DONE_ACCESSIBLE_DISCOVERY;
+    if (!bReady) {
+        // then, we need to take the other file's event lock...
+        acquire_source_file_specific_event_lock(pNamespace->pOriginalSourceFile, pAskingContext->pWorker);
+        // ...AND recheck once locked.
+        bReady = pNamespace->uTCProgress >= ESOURCE_COMP_STATE_DONE_ACCESSIBLE_DISCOVERY;
+        if (bReady) { // If actually read ready after lock, we can unlock right away and return as-if ready...
+            release_source_file_specific_event_lock(pNamespace->pOriginalSourceFile, pAskingContext->pWorker);
+            READ_FENCE();
+        } // Otherwise, we do *not* release the lock (caller should be prepared for this: it surely wants to be able to setup
+            //    a wait event *while still locked* before releasing it...
+    } else {
+        READ_FENCE(); // if we read 'ready', we'll protect against some compiler or CPU trickeries between
+                        // reading that state and reading any 'contents' here, with that fence => all contents read from now on should
+                        // have been updated correctly as per-the (hopefully frozen) ready-state.
+    }
+    return bReady;
+}
+
+local_func TCContext* get_current_or_spawn_new_context_on_wait(TCContext* pTCContext)
+{
+    TCContext* pWaitingContext = pTCContext;
+    if (!should_tc_ctx_halt_on_non_success(pTCContext)) {
+        pWaitingContext = (TCContext*)alloc_from(pTCContext->pIsolatedSourceFile->localArena,
+            sizeof(TCContext), alignof(TCContext));
+        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL9_VERBOSE, EventREPT_CUSTOM_HARDCODED(
+            "Allocated new TC Task 0x%llx as detached waiter of current statement from a non-halting context",
+            reinterpret_cast<u64>(pWaitingContext)), pTCContext->pWorker);
+        *pWaitingContext = *pTCContext;
+        pWaitingContext->setOfNewlyDeclaredIdentifiers = {}; // will be initialized at task start if need be
+        pWaitingContext->uSizeOfVecUsingAccessibleEnumBefore = 0u;
+        pWaitingContext->uSizeOfVecUsingAccessibleNamespaceBefore = 0u;
+        pWaitingContext->uSizeOfVecUsingAllEnumBefore = 0u;
+        pWaitingContext->uSizeOfVecUsingAllNamespaceBefore = 0u;
+        pWaitingContext->uSizeOfVecChildrenNamespacesBefore = 0u;
+        pWaitingContext->uSizeOfVecIncludedStructLikeBefore = 0u;
+        pWaitingContext->uGlobalStatementOnHold = pTCContext->pCurrentBlock->uStatementBeingTypechecked;
+    }
+    return pWaitingContext;
+}
+
+local_func ETCResult add_waiting_task_for_compound_body_already_event_locked_iff_other_file(const TypeInfo_CompoundBase* pAsCompound,
     u32 uNodeIndexWithWait, TCContext* pTCContext)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
         "Putting TC task for statement on hold, waiting for full-type resolution of compound %u in file %u ('%s')",
-        u64(pAsCompound->uRegistrationIndex), u64(u32(pTCContext->pIsolatedSourceFile->iRegistrationIndex)), // TODO: we really need to assign a source file to compounds
+        u64(pAsCompound->uRegistrationIndex), u64(u32(pAsCompound->pRegistration->pSourceFile->iRegistrationIndex)),
         reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, pAsCompound->pRegistration->iPrimaryIdentifier).c_str())),
         pTCContext->pWorker);
 
     TCWaitingReason waitingReason = make_waiting_reason(ETaskWaitingReason::EWR_COMPOUND_BODY_TYPECHECK_SUCCESS, 
         pAsCompound->pRegistration->pStatementWithSignature->iSourceFileIndex, pAsCompound->uRegistrationIndex);
-    if (should_tc_ctx_halt_on_non_success(pTCContext))
-        return add_waiting_task_to(pTCContext->pIsolatedSourceFile, waitingReason, uNodeIndexWithWait, pTCContext);
-    else {
-        TCContext* pNewWaitingContext = (TCContext*)alloc_from(pTCContext->pIsolatedSourceFile->localArena,
-            sizeof(TCContext), alignof(TCContext));
-        *pNewWaitingContext = *pTCContext;
-        pNewWaitingContext->uGlobalStatementOnHold = pTCContext->pCurrentBlock->uStatementBeingTypechecked;
-        return add_waiting_task_to(pTCContext->pIsolatedSourceFile, waitingReason, uNodeIndexWithWait, pNewWaitingContext);
+
+    TCContext* pWaitingContext = get_current_or_spawn_new_context_on_wait(pTCContext);
+    pWaitingContext->waitingReason = waitingReason;
+
+    if (pAsCompound->pRegistration->pSourceFile != pTCContext->pIsolatedSourceFile) {
+        pAsCompound->pRegistration->vecNonLocalTasksWaitingForCompletion.append(pWaitingContext);
+        release_source_file_specific_event_lock(pAsCompound->pRegistration->pSourceFile, pTCContext->pWorker);
+    } else {
+        pAsCompound->pRegistration->vecLocalTasksWaitingForCompletion.append(pWaitingContext);
     }
+
+    on_registered_new_waiting_task(pWaitingContext);
+    return ETCResult::ETCR_WAITING;
+}
+
+local_func ETCResult add_waiting_task_for_already_event_locked_othersource_namespace(TCNamespace* pNamespace,
+    u32 uNodeIndexWithWait, TCContext* pTCContext)
+{
+    Assert(pNamespace->pOriginalSourceFile != pTCContext->pIsolatedSourceFile,
+        "should use 'add_waiting_task_for_fully_discovered_namespace_in_same_source' for namespace in same file");
+
+    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+        "Putting TC task for statement on hold, waiting for completion of discovery in namespace %u within non-same source file %d: '%s')",
+        u64(pNamespace->uRegistrationIndex), u64(u32(pNamespace->pOriginalSourceFile->iRegistrationIndex)),
+        reinterpret_cast<u64>(pNamespace->pOriginalSourceFile->sourceFileName.c_str())),
+        pTCContext->pWorker);
+
+    TCWaitingReason waitingReason = make_waiting_reason(ETaskWaitingReason::EWR_NAMESPACE_GATHER_ALL_ACCESSIBLE, 
+        pNamespace->pOriginalSourceFile->iRegistrationIndex, pNamespace->uRegistrationIndex);
+
+    TCContext* pWaitingContext = get_current_or_spawn_new_context_on_wait(pTCContext);
+    pWaitingContext->waitingReason = waitingReason;
+
+    pNamespace->vecNonLocalTasksWaitingForCompletion.append(pWaitingContext);
+    release_source_file_specific_event_lock(pNamespace->pOriginalSourceFile, pTCContext->pWorker);
+
+    on_registered_new_waiting_task(pWaitingContext);
+    return ETCResult::ETCR_WAITING;
+}
+
+local_func ETCResult add_waiting_task_for_fully_discovered_namespace_in_same_source(TCNamespace* pNamespace,
+    u32 uNodeIndexWithWait, TCContext* pTCContext)
+{
+    Assert(pNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile,
+        "should use 'add_waiting_task_for_othersource_namespace' for a namespace declared in another file");
+
+    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+        "Putting TC task for statement on hold, waiting for completion of discovery in namespace %u within same source file '%s')",
+        u64(pNamespace->uRegistrationIndex),
+        reinterpret_cast<u64>(pNamespace->pOriginalSourceFile->sourceFileName.c_str())),
+        pTCContext->pWorker);
+
+    TCWaitingReason waitingReason = make_waiting_reason(ETaskWaitingReason::EWR_NAMESPACE_GATHER_ALL_IN_FILE, 
+        pNamespace->pOriginalSourceFile->iRegistrationIndex, pNamespace->uRegistrationIndex);
+
+    TCContext* pWaitingContext = get_current_or_spawn_new_context_on_wait(pTCContext);
+    pWaitingContext->waitingReason = waitingReason;
+
+    pNamespace->vecLocalTasksWaitingForCompletion.append(pWaitingContext);
+
+    on_registered_new_waiting_task(pWaitingContext);
+    return ETCResult::ETCR_WAITING;
+}
+
+local_func ETCResult add_waiting_task_for_identifier(int iIdentifierHandle, TCNamespace* pNamespace, bool bStrictNamespace,
+    u32 uNodeIndexWithWait, TCContext* pTCContext)
+{
+    Assert(pNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile,
+        "Should not wait on identifier across distinct files. Wait for namespace instead...");
+
+    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
+        "Putting TC task for statement on hold, waiting for identifier %s to be found %s in some namespace",
+        reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierHandle).c_str()),
+        reinterpret_cast<u64>(bStrictNamespace ? "strictly" : "loosely")),
+        pTCContext->pWorker);
+    // TODO: log which namespace
+
+    // TODO: find a way to flag 'bStrictNamespace' in our reference tables...
+
+    TCWaitingReason waitingReason = make_waiting_reason(ETaskWaitingReason::EWR_GLOBAL_IDENTIFIER_RESOLUTION, 
+        WAITING_REASON_NO_SPECIFIC_INDEX, u32(iIdentifierHandle));
+
+    TCContext* pWaitingContext = get_current_or_spawn_new_context_on_wait(pTCContext);
+    pWaitingContext->waitingReason = waitingReason;
+
+    u64 uHash = get_map_hash(waitingReason);
+    auto itThisReason = pNamespace->mapTasksWaitingForGlobalIds.findHashed(uHash, waitingReason);
+    if (itThisReason == pNamespace->mapTasksWaitingForGlobalIds.end()) {
+        TmpArray<TCContext*> newArray;
+        newArray.init(pNamespace->pOriginalSourceFile->localArena);
+        itThisReason = pNamespace->mapTasksWaitingForGlobalIds.insert_not_present(uHash, waitingReason, newArray);
+    }
+    itThisReason.value().append(pWaitingContext);
+
+    on_registered_new_waiting_task(pWaitingContext);
+    return ETCResult::ETCR_WAITING;
 }
 
 local_func void set_intrinsic_value_same_as_intrinsic_of(const TmpTCNode* pSourceExpr, TmpTCNode* pToSet)

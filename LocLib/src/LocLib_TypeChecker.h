@@ -338,32 +338,6 @@ local_func ETCResult typecheck_cmp_binary_op(TmpTCNode* pExpr, u8 uOp, TCStateme
         "typecheck_cmp_binary_op() : not yet implemented");
 }
 
-struct ReadNamespaceLaggedStateLockHelperWithAutoRelease {
-
-    ReadNamespaceLaggedStateLockHelperWithAutoRelease(CompilationContext* pContext):_pSourceFile(0), _pContext(pContext) {}
-
-    ReadNamespaceLaggedStateLockHelperWithAutoRelease(SourceFileDescAndState* pSourceFile, CompilationContext* pContext)
-        :_pSourceFile(0) { acquire_read_lock(pSourceFile); }
-    
-    void acquire_read_lock(SourceFileDescAndState* pSourceFile) {
-        Assert_(_pContext);
-        Assert_(_pSourceFile == 0u);
-        _pSourceFile = pSourceFile;
-        acquire_read_laggued_state_lock(_pSourceFile, _pContext);
-    }
-
-    ~ReadNamespaceLaggedStateLockHelperWithAutoRelease() {
-        if (_pSourceFile) {
-            Assert_(_pContext);
-            release_read_laggued_state_lock(_pSourceFile, _pContext);
-            _pSourceFile = 0u;
-        }
-    }
-
-    SourceFileDescAndState* _pSourceFile;
-    CompilationContext* _pContext;
-};
-
 // At statement level, typechecks nodes of the op-and-assignment kind
 local_func ETCResult typecheck_op_and_assignment_statement(TmpTCNode* pMainNode, TCStatement* pTCStatement, TCContext* pTCContext)
 {
@@ -550,6 +524,7 @@ local_func ETCResult typecheck_reserved_word(TmpTCNode* pExpr, int iIdentifierHa
 local_func ETCResult typecheck_user_specified_identifier(TmpTCNode* pExpr, int iIdentifierHandle,
     TCStatement* pTCStatement, TCContext* pTCContext, EExpectedExpr eExpectation)
 {
+    Assert_(eExpectation != EExpectedExpr::EXPECT_DECLARABLE); // declarables should *not* take this path
     Assert_(!is_node_already_typechecked(pExpr->pTCNode));
     Assert_(u8(pExpr->pTCNode->ast.uNodeKindAndFlags) == ENodeKind::ENODE_ATOMICEXPR_IDENTIFIER);
     Assert_(iIdentifierHandle = int(pExpr->pTCNode->ast.uPrimaryPayload));
@@ -613,18 +588,8 @@ local_func ETCResult typecheck_user_specified_identifier(TmpTCNode* pExpr, int i
             "Putting TC task for statement on hold, waiting for global identifier '%s'",
             reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iIdentifierHandle).c_str())), pTCContext->pWorker);
 
-        SourceFileDescAndState* pSourceFile = pTCContext->pIsolatedSourceFile;
-        TCWaitingReason waitingReason = make_waiting_reason(ETaskWaitingReason::EWR_GLOBAL_IDENTIFIER_RESOLUTION, 
-            WAITING_REASON_NO_SPECIFIC_INDEX, u32(iIdentifierHandle));
-        if (should_tc_ctx_halt_on_non_success(pTCContext))
-            return add_waiting_task_to(pSourceFile, waitingReason, pExpr->uNodeIndexInStatement, pTCContext);
-        else {
-            TCContext* pNewWaitingContext = (TCContext*)alloc_from(pSourceFile->localArena,
-                sizeof(TCContext), alignof(TCContext));
-            *pNewWaitingContext = *pTCContext;
-            pNewWaitingContext->uGlobalStatementOnHold = pTCContext->pCurrentBlock->uStatementBeingTypechecked;
-            return add_waiting_task_to(pSourceFile, waitingReason, pExpr->uNodeIndexInStatement, pNewWaitingContext);
-        }
+        return add_waiting_task_for_identifier(iIdentifierHandle, pTCContext->pNamespace, false,
+            pExpr->uNodeIndexInStatement, pTCContext);
     }
 }
 
@@ -841,12 +806,9 @@ local_func ETCResult typecheck_dot_descent_expression_against_type(TmpTCNode* pE
     if (get_type_kind(pLeftHandType) == ETYPEKIND_ENUM) {
 
         const TypeInfo_Enum* pAsEnum = (const TypeInfo_Enum*)pLeftHandType;
-        if (!is_compound_type_full_typechecked(pAsEnum)) {
-            return add_waiting_task_for_compound_body(pAsEnum, pExpr->uNodeIndexInStatement, pTCContext);
-        } else if (pAsEnum->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
-            return_error(pExpr, pTCStatement, pTCContext, FERR_OTHER,
-                "typecheck_dot_descent_expression_against_type() : dot-descent against an enum type, which is in error");
-        }
+        check_compound_type_full_availability_may_return_wait_or_error(pAsEnum, pExpr, pTCStatement, pTCContext,
+            "typecheck_dot_descent_expression_against_type() : (enum) cannot dot-descent against");
+
         ValueBinding* pFoundBinding = find_binding_within_enum(iRightHandIdentifier, get_map_hash(iRightHandIdentifier), pAsEnum);
         if (pFoundBinding) {
             Assert_(is_value_tc_const(pFoundBinding));
@@ -864,12 +826,9 @@ local_func ETCResult typecheck_dot_descent_expression_against_type(TmpTCNode* pE
     } else if (get_type_kind(pLeftHandType) == ETYPEKIND_STRUCTLIKE) {
 
         const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pLeftHandType;
-        if (!is_compound_type_full_typechecked(pAsStructLike)) {
-            return add_waiting_task_for_compound_body(pAsStructLike, pExpr->uNodeIndexInStatement, pTCContext);
-        } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
-            return_error(pExpr, pTCStatement, pTCContext, FERR_OTHER,
-                "typecheck_dot_descent_expression_against_type() : dot-descent against a struct or union type, which is in error");
-        }
+        check_compound_type_full_availability_may_return_wait_or_error(pAsStructLike, pExpr, pTCStatement, pTCContext,
+            "typecheck_dot_descent_expression_against_type() : (structlike) cannot dot-descent against");
+
         auto itFound = pAsStructLike->mapAllMembers.find(iRightHandIdentifier);
         if (itFound != pAsStructLike->mapAllMembers.end()) {
             if (itFound.value() >= pAsStructLike->uRuntimeMemberCount) {
@@ -1188,62 +1147,69 @@ local_func ETCResult typecheck_dot_descent_expression_against_structlike_instanc
 }
 
 local_func ETCResult typecheck_dot_descent_expression_against_namespace(TmpTCNode* pExpr, TmpTCNode* pLeftHandExpr,
-    ReferencedNamespace* pRefNamespace, u64 bHasPackageAccess, int iRightHandIdentifier, TCStatement* pTCStatement,
+    TCNamespace* pNamespace, u64 bHasPackageAccess, int iRightHandIdentifier, TCStatement* pTCStatement,
     TCContext* pTCContext, EExpectedExpr eExpectation)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL8_REGULAR_INFO, EventREPT_CUSTOM_HARDCODED(
         "Typechecking dot-descent operator against namespace %u (in source file : '%s')",
-        u64(pRefNamespace->pOrigNamespace->uRegistrationIndex),
-        reinterpret_cast<u64>(pRefNamespace->pOrigNamespace->pOriginalSourceFile->sourceFileName.c_str())), pTCContext->pWorker);
+        u64(pNamespace->uRegistrationIndex),
+        reinterpret_cast<u64>(pNamespace->pOriginalSourceFile->sourceFileName.c_str())), pTCContext->pWorker);
 
-    //bool bKnownFullyDiscovered = true; // must start true for the following call
-    ValueBinding* pBinding = find_binding_within_namespace(iRightHandIdentifier, get_map_hash(iRightHandIdentifier),
-        pRefNamespace, false, pTCContext); /* &bKnownFullyDiscovered was returned from previous implementation... */
+    ValueBinding* pBinding = 0;
+    if (pNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile) { // namespace is in *same* file
 
-    if (pBinding) {
-        Assert_(u8(pBinding->uScopeAndLocation) <= EScopeKind::SCOPEKIND_GLOBAL_PACKAGE);
-        if (pBinding->pType == 0) { // marker for a global binding-in-error
-            return_error(pExpr, pTCStatement, pTCContext, CERR_GLOBAL_BINDING_ON_STATEMENT_WITH_ERROR,
-                "typecheck_dot_descent_expression_against_namespace() : found identifier, but its binding statement is reported as in error");
-        }
-        if (is_value_tc_const(pBinding)) {
-            if (eExpectation == EExpectedExpr::EXPECT_ASSIGNABLE) {
-                return_error(pExpr, pTCStatement, pTCContext, CERR_CONSTANT_AS_LVALUE,
-                    "typecheck_dot_descent_expression_against_namespace() : found binding to constant when expecting assignable");
+        pBinding = find_binding_within_namespace_in_same_file(iRightHandIdentifier, get_map_hash(iRightHandIdentifier),
+            pNamespace, false, pTCContext);
+
+        if (!pBinding) {
+            if (is_local_namespace_fully_discovered(pNamespace, pTCContext)) {
+                return_error(pExpr, pTCStatement, pTCContext, RERR_UNRESOLVED_IDENTIFIER,
+                    "identifier not found in local, fully solved context");
+            } else {
+                return add_waiting_task_for_identifier(iRightHandIdentifier, pNamespace, true, pExpr->uNodeIndexInStatement, pTCContext);
             }
+        }
+
+    } else {
+
+        if (is_non_local_namespace_fully_discovered_otherwise_return_locked_for_wait(pNamespace, pTCContext)) {
+
+            pBinding = find_binding_within_namespace_in_other_file(iRightHandIdentifier, get_map_hash(iRightHandIdentifier),
+                pNamespace, pTCContext);
+
+            if (!pBinding) {
+                return_error(pExpr, pTCStatement, pTCContext, RERR_UNRESOLVED_IDENTIFIER,
+                    "identifier not found in context from other file");
+            }
+
+            // Should not return privates, if from another file...
+            Assert_(u8(pBinding->uScopeAndLocation) <= EScopeKind::SCOPEKIND_GLOBAL_PACKAGE);
+
         } else {
-            if (eExpectation == EExpectedExpr::EXPECT_CONSTANT) {
-                return_error(pExpr, pTCStatement, pTCContext, CERR_EXPECTED_CONSTANT,
-                    "typecheck_dot_descent_expression_against_namespace() : found binding to variable when expecting constant");
-            }
-        }
-        set_existing_value_as(pBinding, pExpr, EValueSlotOnNode::ENODEVALUESLOT_INTRINSIC, pTCStatement);
-        return set_node_typecheck_expr_success(pExpr->pTCNode);
-
-    } else /*if (!bKnownFullyDiscovered)*/ {
-
-        BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
-            "Putting TC task for statement on hold, waiting for global identifier '%s' resolution within namespace %u (in source file '%s')",
-            reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, iRightHandIdentifier).c_str()),
-            u64(pRefNamespace->pOrigNamespace->uRegistrationIndex),
-            reinterpret_cast<u64>(pRefNamespace->pOrigNamespace->pOriginalSourceFile->sourceFileName.c_str())), pTCContext->pWorker);
-        SourceFileDescAndState* pSourceFile = pTCContext->pIsolatedSourceFile;
-        TCWaitingReason waitingReason = make_waiting_reason(ETaskWaitingReason::EWR_GLOBAL_IDENTIFIER_RESOLUTION, 
-            WAITING_REASON_NO_SPECIFIC_INDEX, u32(iRightHandIdentifier));
-        if (should_tc_ctx_halt_on_non_success(pTCContext))
-            return add_waiting_task_to(pSourceFile, waitingReason, pExpr->uNodeIndexInStatement, pTCContext);
-        else {
-            TCContext* pNewWaitingContext = (TCContext*)alloc_from(pSourceFile->localArena,
-                sizeof(TCContext), alignof(TCContext));
-            *pNewWaitingContext = *pTCContext;
-            pNewWaitingContext->uGlobalStatementOnHold = pTCContext->pCurrentBlock->uStatementBeingTypechecked;
-            return add_waiting_task_to(pSourceFile, waitingReason, pExpr->uNodeIndexInStatement, pNewWaitingContext);
+            return add_waiting_task_for_already_event_locked_othersource_namespace(pNamespace, pExpr->uNodeIndexInStatement, pTCContext);
         }
 
-    } /* else {
-        return_error(pExpr, pTCStatement, pTCContext, RERR_UNRESOLVED_IDENTIFIER,
-            "typecheck_dot_descent_expression_against_othersource() : unknown identifier in fully-discovered namespace");
-    } */
+    }
+
+    Assert_(pBinding);
+
+    if (pBinding->pType == 0) { // marker for a global binding-in-error
+        return_error(pExpr, pTCStatement, pTCContext, CERR_GLOBAL_BINDING_ON_STATEMENT_WITH_ERROR,
+            "typecheck_dot_descent_expression_against_namespace() : found identifier, but its binding statement is reported as in error");
+    }
+    if (is_value_tc_const(pBinding)) {
+        if (eExpectation == EExpectedExpr::EXPECT_ASSIGNABLE) {
+            return_error(pExpr, pTCStatement, pTCContext, CERR_CONSTANT_AS_LVALUE,
+                "typecheck_dot_descent_expression_against_namespace() : found binding to constant when expecting assignable");
+        }
+    } else {
+        if (eExpectation == EExpectedExpr::EXPECT_CONSTANT) {
+            return_error(pExpr, pTCStatement, pTCContext, CERR_EXPECTED_CONSTANT,
+                "typecheck_dot_descent_expression_against_namespace() : found binding to variable when expecting constant");
+        }
+    }
+    set_existing_value_as(pBinding, pExpr, EValueSlotOnNode::ENODEVALUESLOT_INTRINSIC, pTCStatement);
+    return set_node_typecheck_expr_success(pExpr->pTCNode);
 }
 
 local_func ETCResult typecheck_dot_descent_expression(TmpTCNode* pExpr, TCStatement* pTCStatement,
@@ -1303,17 +1269,10 @@ local_func ETCResult typecheck_dot_descent_expression(TmpTCNode* pExpr, TCStatem
             case ETypeKind::ETYPEKIND_STRUCTLIKE:
             {
                 const TypeInfo_StructLike* pAsStruct = (const TypeInfo_StructLike*)pUnaliasedType;
-                if (pAsStruct->_coreFlags & (COMPOUNDFLAG_BODY_IN_ERROR|COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME)) {
-                    // TODO: relax this maybe ?
-                    return_error(pExpr, pTCStatement, pTCContext, CERR_COMPOUND_TYPE_IN_ERROR,
-                        "typecheck_dot_descent_expression() : cannot dot-descent against struct or union in error");
-                } else if (!is_compound_type_full_typechecked(pAsStruct)) {
-                    // TODO: also relax this ??? wait to see if member or const, etc. ??
-                    return add_waiting_task_for_compound_body(pAsStruct, baseExpr.uNodeIndexInStatement, pTCContext);
-                } else {
-                    return typecheck_dot_descent_expression_against_structlike_instance(pExpr, &baseExpr, pAsStruct,
-                        iIdentifierHandle, pTCStatement, pTCContext, eExpectation);
-                }
+                check_compound_type_full_availability_may_return_wait_or_error(pAsStruct, pExpr, pTCStatement, pTCContext,
+                    "typecheck_dot_descent_expression() : cannot dot-descent against struclike instance from");
+                return typecheck_dot_descent_expression_against_structlike_instance(pExpr, &baseExpr, pAsStruct,
+                    iIdentifierHandle, pTCStatement, pTCContext, eExpectation);
             } break;
         
             case ETypeKind::ETYPEKIND_ARRAY: {
@@ -1346,14 +1305,13 @@ local_func ETCResult typecheck_dot_descent_expression(TmpTCNode* pExpr, TCStatem
                     u32 uNamespaceIndexInFile = u32(uNamespaceId >> 32) & 0x7FFF'FFFFu;
                     u64 bHasPackageAccess = uNamespaceId & NAMESPACEFLAG_HAS_PACKAGE_ACCESS;                    
                     SourceFileDescAndState* pFileWithNamespace = pTCContext->pProgCompilationState->vecSourceFiles[u32(iSourceFileIndex)];
-                    ReferencedNamespace* pRefNamespace = (ReferencedNamespace*)pFileWithNamespace->vecNamespaces[uNamespaceIndexInFile];
+                    TCNamespace* pRefNamespace = pFileWithNamespace->vecNamespaces[uNamespaceIndexInFile];
                     return typecheck_dot_descent_expression_against_namespace(pExpr, &baseExpr, pRefNamespace, bHasPackageAccess,
                             iIdentifierHandle, pTCStatement, pTCContext, eExpectation);
 
                 } else if (get_core_type_(pUnaliasedType) == ECoreType::ECORETYPE_TYPE) {
                     Assert_(is_value_tc_only(baseExpr.pIntrinsicValue));
                     const TypeInfo* pTypeBeforeDot = type_from_type_node(baseExpr.pIntrinsicValue);
-                    check_type_availability_may_return_wait_or_error(pTypeBeforeDot, pExpr, pTCStatement, pTCContext, "typecheck_dot_descent_expression() : cannot dot-descent against");
                     return typecheck_dot_descent_expression_against_type(pExpr, pTypeBeforeDot,
                         iIdentifierHandle, pTCStatement, pTCContext, eExpectation);
                 }
@@ -1464,15 +1422,8 @@ local_func ETCResult typecheck_any_non_invoc_expression(TmpTCNode* pExpr, u8 uNo
         if (LIKELY(get_type_kind(addressParam.pIntrinsicValue->pType) == ETypeKind::ETYPEKIND_POINTER)) {
             const TypeInfo_Pointer* pAsPtrType = (const TypeInfo_Pointer*)addressParam.pIntrinsicValue->pType;
             const TypeInfo* pPointedToType = pAsPtrType->pPointedToType;
-            if (get_type_kind(pPointedToType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
-                const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pPointedToType;
-                if (!is_structlike_type_footprint_available(pAsStructLike)) {
-                    return add_waiting_task_for_compound_body(pAsStructLike, pExpr->uNodeIndexInStatement, pTCContext);
-                } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME) {
-                    return_error(pExpr, pTCStatement, pTCContext, CERR_DEREF_STRUCTLIKE_IN_ERROR,
-                        "failed to dereference structlike : typecheck of structlike is in error");
-                }
-            }
+            check_type_footprint_availability_may_return_wait_or_error(pPointedToType, pExpr, pTCStatement, pTCContext,
+                "failed to dereference pointer to");
 
             if (is_value_known_or_nyka(addressParam.pIntrinsicValue)) {
                 Assert_(is_value_known_embd(addressParam.pIntrinsicValue));
@@ -1663,7 +1614,6 @@ local_func ETCResult typecheck_any_non_invoc_expression(TmpTCNode* pExpr, u8 uNo
             if (pParamNodeType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
                 Assert_(is_value_tc_const(param.pIntrinsicValue));
                 const TypeInfo* pBaseType = type_from_type_node(param.pIntrinsicValue);
-                check_type_availability_may_return_wait_or_error(pBaseType, pExpr, pTCStatement, pTCContext, "typecheck_invocation_form() : Cannot type-construct from");
                 
                 switch (uOp) {
                     case ETOK_ARRAYLIKE_DECL: {
@@ -1671,6 +1621,8 @@ local_func ETCResult typecheck_any_non_invoc_expression(TmpTCNode* pExpr, u8 uNo
                         Assert_(u8(insideWrapper.pTCNode->ast.uNodeKindAndFlags) == ENODE_SUBEXPR_WRAPPER);
                         Assert_(u8(insideWrapper.pTCNode->ast.uNodeKindAndFlags >> 8) == ETOK_CLOSING_BRACKET);
                         if (insideWrapper.pTCNode->ast.uPrimaryChildNodeIndex != INVALID_NODE_INDEX) {
+                            check_type_footprint_availability_may_return_wait_or_error(pBaseType, pExpr, pTCStatement, pTCContext,
+                                "cannot succeed array delaration against");
                             TmpTCNode insideBrackets = init_tmp_tc_node(insideWrapper.pTCNode->ast.uPrimaryChildNodeIndex, pTCStatement, pTCContext);
                             return typecheck_arraylike_decl(pExpr, &insideBrackets, pBaseType, pTCStatement, pTCContext, inferredFromBelow);
                         } else { // empty brackets => basic slice declaration
@@ -1931,7 +1883,8 @@ local_func ETCResult typecheck_any_non_invoc_expression(TmpTCNode* pExpr, u8 uNo
                 if (pTypeNodeType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
                     Assert_(is_value_tc_only(typeNode.pIntrinsicValue));
                     pExplicitType = type_from_type_node(typeNode.pIntrinsicValue);
-                    check_type_availability_may_return_wait_or_error(pExplicitType, pExpr, pTCStatement, pTCContext, "Cannot array-init from");
+                    check_type_footprint_availability_may_return_wait_or_error(pExplicitType, pExpr, pTCStatement, pTCContext,
+                        "Cannot literal-array-init from");
                 } else {
                     return_error(pExpr, pTCStatement, pTCContext, CERR_EXPECTED_TYPE,
                         "explicit expression before array literal should be a type");
@@ -2201,118 +2154,6 @@ when_macro_start_again:
     }
 }
 
-local_func ValueBinding* check_no_double_inclusions_enum_in_base_namespace(const TypeInfo_Enum* pEnumToUse, ReferencedNamespace* pBaseNamespace, TCContext* pTCContext)
-{
-    u32 uCountDecls = pEnumToUse->vecAllMembers.size();
-    for (u32 uDecl = 0u; uDecl < uCountDecls; uDecl++) {
-        ValueBinding* pDeclBinding = pEnumToUse->vecAllMembers[uDecl];
-        ValueBinding* pAlreadyThere = find_binding_within_namespace(pDeclBinding->iIdentifierHandle,
-            get_map_hash(pDeclBinding->iIdentifierHandle), pBaseNamespace, false, pTCContext);
-        if (pAlreadyThere)
-            return pAlreadyThere;
-    }
-    u32 uCountUsed = pEnumToUse->vecUsed.size();
-    for (u32 uUsed = 0u; uUsed < uCountUsed; uUsed++) {
-        const TypeInfo_Enum* pUsed = pEnumToUse->vecUsed[uUsed];
-        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_base_namespace(pUsed, pBaseNamespace, pTCContext);
-        if (pAlreadyThere)
-            return pAlreadyThere;
-    }
-    return 0;
-}
-
-local_func ValueBinding* check_no_double_inclusions_enum_in_enum(const TypeInfo_Enum* pEnumToUse, const TypeInfo_Enum* pEnumInside, TCContext* pTCContext)
-{
-    u32 uCountDecls = pEnumToUse->vecAllMembers.size();
-    for (u32 uDecl = 0u; uDecl < uCountDecls; uDecl++) {
-        ValueBinding* pDeclBinding = pEnumToUse->vecAllMembers[uDecl];
-        ValueBinding* pAlreadyThere = find_binding_within_enum(pDeclBinding->iIdentifierHandle,
-            get_map_hash(pDeclBinding->iIdentifierHandle), pEnumInside);
-        if (pAlreadyThere)
-            return pAlreadyThere;
-    }
-    u32 uCountUsed = pEnumToUse->vecUsed.size();
-    for (u32 uUsed = 0u; uUsed < uCountUsed; uUsed++) {
-        const TypeInfo_Enum* pUsed = pEnumToUse->vecUsed[uUsed];
-        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_enum(pUsed, pEnumInside, pTCContext);
-        if (pAlreadyThere)
-            return pAlreadyThere;
-    }
-    return 0;
-}
-
-local_func ValueBinding* check_no_double_inclusions_enum_in_proclocal(const TypeInfo_Enum* pEnumToUse, TCContext* pTCContext)
-{
-    Assert_(pTCContext->pProcResult);
-    u32 uCountDecls = pEnumToUse->vecAllMembers.size();
-    for (u32 uDecl = 0u; uDecl < uCountDecls; uDecl++) {
-        ValueBinding* pDeclBinding = pEnumToUse->vecAllMembers[uDecl];
-        ValueBinding* pAlreadyThere = find_binding_within_proclocal(pDeclBinding->iIdentifierHandle,
-            get_map_hash(pDeclBinding->iIdentifierHandle), true, pTCContext);
-        if (pAlreadyThere)
-            return pAlreadyThere;
-    }
-    u32 uCountUsed = pEnumToUse->vecUsed.size();
-    for (u32 uUsed = 0u; uUsed < uCountUsed; uUsed++) {
-        const TypeInfo_Enum* pUsed = pEnumToUse->vecUsed[uUsed];
-        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_proclocal(pUsed, pTCContext);
-        if (pAlreadyThere)
-            return pAlreadyThere;
-    }
-    return 0;
-}
-
-
-local_func ValueBinding* check_no_double_inclusions_enum_in_current_namespace(const TypeInfo_Enum* pEnumToUse, TCContext* pTCContext)
-{
-    TCNamespace* pNamespace = pTCContext->pNamespace;
-    Assert_(pNamespace);
-    while (pNamespace) {
-        Assert_(pNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile);
-        ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_base_namespace(pEnumToUse, (ReferencedNamespace*)pNamespace, pTCContext);
-        if (pAlreadyThere)
-            return pAlreadyThere;
-        pNamespace = pNamespace->pParent;
-    }
-    return 0;
-}
-
-local_func ValueBinding* check_no_double_inclusions_namespace_in_proclocal(ReferencedNamespace* pNamespaceToUse, TCContext* pTCContext)
-{
-    Assert_(pTCContext->pProcResult);
-    if (pNamespaceToUse->pOrigNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile) {
-        TCNamespace* pOrig = pNamespaceToUse->pOrigNamespace;
-        for (auto it = pOrig->mapAllGlobalDeclarationsById.begin(), itEnd = pOrig->mapAllGlobalDeclarationsById.end();
-             it != itEnd; it++)
-        {
-            int iIdentifier = it.first();
-            ValueBinding* pAlreadyThere = find_binding_within_proclocal(iIdentifier, get_map_hash(iIdentifier), true, pTCContext);
-            if (pAlreadyThere)
-                return pAlreadyThere;
-        }
-        u32 uCountUsedEnums = pOrig->vecAllUsedEnums.size();
-        for (u32 uUsed = 0u; uUsed < uCountUsedEnums; uUsed++) {
-            const TypeInfo_Enum* pUsedEnum = pOrig->vecAllUsedEnums[uUsed];
-            ValueBinding* pAlreadyThere = check_no_double_inclusions_enum_in_proclocal(pUsedEnum, pTCContext);
-            if (pAlreadyThere)
-                return pAlreadyThere;
-        }
-        u32 uCountUsedNamespaces = pOrig->vecAllUsedNamespaces.size();
-        for (u32 uUsed = 0u; uUsed < uCountUsedNamespaces; uUsed++) {
-            ReferencedNamespace* pUsedNamespace = pOrig->vecAllUsedNamespaces[uUsed];
-            ValueBinding* pAlreadyThere = check_no_double_inclusions_namespace_in_proclocal(pUsedNamespace, pTCContext);
-            if (pAlreadyThere)
-                return pAlreadyThere;
-        }
-
-    } else {
-        // TODO !!
-
-    }
-
-    return 0;
-}
-
 local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement* pTCStatement, TCContext* pTCContext)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
@@ -2341,42 +2182,91 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
             SourceFileDescAndState* pOrigSourceFile = pTCContext->pProgCompilationState->vecSourceFiles[u32(iNamespaceSourceFile)];
             TCNamespace* pOrigNamespace = pOrigSourceFile->vecNamespaces[uNamespaceRegistration];
 
-            ValueBinding* foundDoubleInclusion = check_no_double_inclusions_namespace_generic((ReferencedNamespace*)pOrigNamespace, pTCContext);
-            if (foundDoubleInclusion) {
-                // TODO: report which
-                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
-                    "'using' of namespace here would result in name collisions");
-            }
-
             if (!is_ctx_compound(pTCContext)) {
                 if (is_ctx_global(pTCContext)) {
                     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                         "Registration of a new namespace as 'using' in current namespace"), pTCContext->pWorker);
-
-                    acquire_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
-                    if (!check_not_circular_using_from(pTCContext->pNamespace, pOrigNamespace, pTCContext->pWorker->tmpArena)) {
-                        release_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
-                        return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                            "'using' of this namespace here would create a circular using chain. This is fobidden.");
+                    if (pOrigSourceFile == pTCContext->pIsolatedSourceFile) {
+                        if (!check_not_circular_using_from(pTCContext->pNamespace, pOrigNamespace, pTCContext->pWorker->tmpArena)) {
+                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
+                                "'using' of this namespace here would create a circular using chain. This is forbidden.");
+                        }
+                        bool bLocalShadowing;
+                        if (!check_no_double_inclusions_namespace_from_same_source_in_current_namespace(pOrigNamespace, pTCContext, &bLocalShadowing)) {
+                            if (bLocalShadowing) {
+                                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                    "'using' of this namespace here would violate a name shadowing interdiction."); // TODO: log which
+                            } else {
+                                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                    "'using' of this namespace here would result in name collision."); // TODO: log which
+                            }
+                        }
+                        pOrigNamespace->vecAllNamespacesInSameFileUsingSelf.append(pTCContext->pNamespace->uRegistrationIndex);
+                        // whether currently public or private, all bindings from namespace in same file are copied to our map-of-all
+                        for (auto it = pOrigNamespace->mapAllBindingsInclUsing.begin(), itEnd = pOrigNamespace->mapAllBindingsInclUsing.end();
+                                it != itEnd; it++) {
+                            pTCContext->pNamespace->mapAllBindingsInclUsing.insert(it.key(), it.value());
+                        }
+                    } else {
+                        if (!is_non_local_namespace_fully_discovered_otherwise_return_locked_for_wait(pOrigNamespace, pTCContext)) {
+                            return add_waiting_task_for_already_event_locked_othersource_namespace(pOrigNamespace, pMainNode->uNodeIndexInStatement, pTCContext);
+                        }
+                        bool bLocalShadowing;
+                        if (!check_no_double_inclusions_namespace_from_other_source_in_current_namespace(pOrigNamespace, pTCContext, &bLocalShadowing)) {
+                            if (bLocalShadowing) {
+                                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                    "'using' of this namespace (from other file) here would violate a name shadowing interdiction."); // TODO: log which
+                            } else {
+                                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                    "'using' of this namespace (from other file) here would result in name collision."); // TODO: log which
+                            }
+                        }
+                        // whether currently public or private, accessible bindings from namespace in other file are copied to our map-of-all
+                        for (auto it = pOrigNamespace->mapAccessibleBindingsInclUsing.begin(), itEnd = pOrigNamespace->mapAccessibleBindingsInclUsing.end();
+                                it != itEnd; it++) {
+                            pTCContext->pNamespace->mapAllBindingsInclUsing.insert(it.key(), it.value());
+                        }
                     }
-
-                    pTCContext->pNamespace->vecAllUsedNamespaces.append((ReferencedNamespace*)pOrigNamespace);
-                    if (pTCContext->eGlobalDeclScope < SCOPEKIND_GLOBAL_PRIVATE)
-                        pTCContext->pNamespace->vecAccessibleUsedNamespaces.append((ReferencedNamespace*)pOrigNamespace);
-
-                    u64 uCurrentNamespaceId = get_namespace_id((ReferencedNamespace*)pTCContext->pNamespace);
-                    //acquire_write_laggued_state_lock(pOrigSourceFile, pTCContext);
-                    pOrigNamespace->mapOthersUsingThis.insert(uCurrentNamespaceId, (ReferencedNamespace*)pTCContext->pNamespace);
-                    //release_write_laggued_state_lock(pOrigSourceFile, pTCContext);
-                    release_global_using_graph_lock(pTCContext->pProgCompilationState, pTCContext->pWorker);
+                    pTCContext->pNamespace->vecAllUsedNamespaces.append(pOrigNamespace);
+                    if (pTCContext->eGlobalDeclScope != EScopeKind::SCOPEKIND_GLOBAL_PRIVATE) {
+                        // that 'used' becomes accessible also
+                        pTCContext->pNamespace->vecAccessibleUsedNamespaces.append(pOrigNamespace);
+                        // ... and only if non-private, accessible-only bindings from namespace in same file are copied to our map-of-accessible
+                        for (auto it = pOrigNamespace->mapAccessibleBindingsInclUsing.begin(), itEnd = pOrigNamespace->mapAccessibleBindingsInclUsing.end();
+                                it != itEnd; it++) {
+                            pTCContext->pNamespace->mapAccessibleBindingsInclUsing.insert(it.key(), it.value());
+                        }
+                    }
                     return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
-                } else {
-                    Assert_(is_ctx_regular_proc_body(pTCContext));
 
-                    pTCContext->pProcResult->vecScopedEntities.append((ReferencedNamespace*)pOrigNamespace);
+                } else { Assert_(is_ctx_with_proc_source(pTCContext));
+
+                    Assert_(pTCContext->pProcResult);
+                    if (pOrigSourceFile == pTCContext->pIsolatedSourceFile) {
+                        // within procs, we enforce strict termination of the discovery for all used namespaces, even if from same file.
+                        // the complexity of checking non-conflicts against multi-using proc-local statements seems too high otherwise.
+                        if (!is_local_namespace_fully_discovered(pOrigNamespace, pTCContext)) {
+                            return add_waiting_task_for_fully_discovered_namespace_in_same_source(pOrigNamespace,
+                                pMainNode->uNodeIndexInStatement, pTCContext);
+                        }
+                    } else {
+                        if (!is_non_local_namespace_fully_discovered_otherwise_return_locked_for_wait(pOrigNamespace, pTCContext)) {
+                            return add_waiting_task_for_already_event_locked_othersource_namespace(pOrigNamespace,
+                                pMainNode->uNodeIndexInStatement, pTCContext);
+                        }
+                    }
+                    if (!check_no_double_inclusions_namespace_in_proclocal(pOrigNamespace, pTCContext)) {
+                        return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                            "'using' of this namespace in this proc-local scope would result in name collision."); // TODO: log which
+                    }
+                    // Note: we do not check for namespace in current *namespace* there,
+                    //    since we dropped out the idea of global unshadowing from proc scopes
+                    pTCContext->pProcResult->vecScopedEntities.append(make_scoped_entity(pOrigNamespace));
                     return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
+
                 }
-            } else { Assert_(is_ctx_compound(pTCContext));
+
+            } else {
                 Assert_(pTCContext->pCompoundToTC);
                 if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
                     return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
@@ -2386,7 +2276,9 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
                         "'using' of namespace within enum is invalid.");
                 }
             }
+
         } else if (whatToUse.pIntrinsicValue->pType == g_pCoreTypesInfo[ECORETYPE_TYPE]) {
+
             const TypeInfo* pUsedType = type_from_type_node(whatToUse.pIntrinsicValue);
             if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
                 if (!is_ctx_compound(pTCContext)) {
@@ -2401,7 +2293,6 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
                 } else { Assert_(is_ctx_compound(pTCContext));
                     Assert_(pTCContext->pCompoundToTC);
                     if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
-                        // TODO: allow some 'using' syntax for integrating only those *constants* there ???
                         return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
                             "'using' of struct-like within another struct-like is invalid. Did you intend 'including' ?");
                     } else { Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_ENUM);
@@ -2411,37 +2302,43 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
                 }
             } else if (get_type_kind(pUsedType) == ETypeKind::ETYPEKIND_ENUM) {
                 const TypeInfo_Enum* pAsUsedEnum = (const TypeInfo_Enum*)pUsedType;
-                if (!is_compound_type_full_typechecked(pAsUsedEnum)) {
-                    return add_waiting_task_for_compound_body(pAsUsedEnum, pMainNode->uNodeIndexInStatement, pTCContext);
-                } else if (pAsUsedEnum->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
-                    return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                        "'using' of enum which is in error");
-                }
+                check_compound_type_full_availability_may_return_wait_or_error(pAsUsedEnum, pMainNode, pTCStatement, pTCContext,
+                    "cannot succeed on 'using' of");
+
                 if (!is_ctx_compound(pTCContext)) {
                     if (is_ctx_global(pTCContext)) {
                         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                             "Registration of a new enum as 'using' in current namespace"), pTCContext->pWorker);
-                        ValueBinding* foundDoubleInclusion = check_no_double_inclusions_enum_in_current_namespace(pAsUsedEnum, pTCContext);
+                        bool bLocalShadowing;
+                        ValueBinding* foundDoubleInclusion = check_no_double_inclusions_enum_in_current_namespace(pAsUsedEnum,
+                            pTCContext, &bLocalShadowing);
                         if (foundDoubleInclusion) {
-                            // TODO: report which
-                            return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
-                                "'using' of enum in current namespace would result in name collisions");
+                            if (bLocalShadowing) {
+                                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                    "'using' of enum in current namespace would violate a name shadowing interdiction."); // TODO: log which
+                            } else {
+                                return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                    "'using' of enum in current namespace would result in name collisions"); // TODO: log which
+                            }
                         }
 
                         pTCContext->pNamespace->vecAllUsedEnums.append(pAsUsedEnum);
-                        if (pTCContext->eGlobalDeclScope < SCOPEKIND_GLOBAL_PRIVATE)
+                        add_all_bindings_from_enum_to(&pTCContext->pNamespace->mapAllBindingsInclUsing, pAsUsedEnum);
+                        if (pTCContext->eGlobalDeclScope < SCOPEKIND_GLOBAL_PRIVATE) {
                             pTCContext->pNamespace->vecAccessibleUsedEnums.append(pAsUsedEnum);
+                            add_all_bindings_from_enum_to(&pTCContext->pNamespace->mapAccessibleBindingsInclUsing, pAsUsedEnum);
+                        }
                         return set_node_typecheck_notanexpr_success(pMainNode->pTCNode);
 
-                    } else {
-                        Assert_(is_ctx_regular_proc_body(pTCContext));
+                    } else { Assert_(is_ctx_with_proc_source(pTCContext));
+
                         Assert_(pTCContext->pProcResult);
                         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                             "Registration of a new enum as 'using' in current proc scope"), pTCContext->pWorker);
 
                         ValueBinding* foundDoubleInclusion = check_no_double_inclusions_enum_in_proclocal(pAsUsedEnum, pTCContext);
-                        if (!foundDoubleInclusion)
-                            foundDoubleInclusion = check_no_double_inclusions_enum_in_current_namespace(pAsUsedEnum, pTCContext);
+                        // Note: we do not check for enum in current *namespace* there,
+                        //    since we dropped out the idea of global unshadowing from proc scopes
                         if (foundDoubleInclusion) {
                             // TODO: report which
                             return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
@@ -2462,16 +2359,15 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
                         }
 
                         ValueBinding* foundDoubleInclusion = check_no_double_inclusions_enum_in_enum(pAsUsedEnum, pAsCurrentEnum, pTCContext);
-                        if (!foundDoubleInclusion)
-                            foundDoubleInclusion = check_no_double_inclusions_enum_in_current_namespace(pAsUsedEnum, pTCContext);
+                        // Note: we do not check for enum in current *namespace* there,
+                        //    since we dropped out the idea of global unshadowing from enums
                         if (foundDoubleInclusion) {
-                            // TODO: report which
                             return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
-                                "'using' of enum in current enum would result in name collisions");
+                                "'using' of enum in current enum would result in name collisions"); // TODO: log which
                         }
-
-                        // Note: we do *not* need to check if not circular here... since we typecheck enum bodies *sequentially*
-                        pAsCurrentEnum->vecUsed.append(pAsEnumToUSe);
+                        // Note: we do *not* need to check if not circular here... since we typecheck enum bodies *sequentially*,
+                        //    and wait for completion before usage.
+                        pAsCurrentEnum->vecUsed.append(pAsUsedEnum);
                         if (pAsUsedEnum->pLastValue) {
                             pAsCurrentEnum->pLastValue = pAsUsedEnum->pLastValue;
                         }
@@ -2499,21 +2395,25 @@ local_func ETCResult typecheck_using_statement(TmpTCNode* pMainNode, TCStatement
                     if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
                         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                             "Registration of a structlike as an included aggregate in current structlike"), pTCContext->pWorker);
-
-                        if (!is_compound_type_full_typechecked(pAsIncludedStructLike)) {
-                            return add_waiting_task_for_compound_body(pAsIncludedStructLike, pMainNode->uNodeIndexInStatement, pTCContext);
-                        } else if (pAsIncludedStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR) {
-                            return_error(pMainNode, pTCStatement, pTCContext, FERR_OTHER,
-                                "'including' of struct which is in error");
-                        }
+                        check_compound_type_full_availability_may_return_wait_or_error(pAsIncludedStructLike, pMainNode, pTCStatement, pTCContext,
+                            "cannot succeed 'including' of");
 
                         TypeInfo_StructLike* pTCedStructLike = (TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType;
+                        if (!check_no_double_inclusions_structlike_in_structlike(pAsIncludedStructLike, pTCedStructLike, pTCContext)) {
+                            return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                "'including' of this other structlike in this structlike scope would result in name collision."); // TODO: log which
+                        }
+                        if (!check_no_double_inclusions_structlike_in_current_namespace_and_set_unshadow(pAsIncludedStructLike, pTCContext)) {
+                            return_error(pMainNode, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
+                                "'including' of this other structlike in this structlike scope would result in name collision with encompassing namespace."); // TODO: log which
+                        }
+
                         u32 uInclusionPos = pTCedStructLike->vecAllMembers.size();
                         pTCedStructLike->vecIncluded.append(uInclusionPos);
                         ValueBinding* pMockBinding = (ValueBinding*)alloc_from(pTCContext->pIsolatedSourceFile->localArena,
                             sizeof(ValueBinding), alignof(ValueBinding));
                         set_binding_source_ref(pMockBinding, pTCStatement, pTCContext, EDeclAttributes::EDECLATTR_REGULAR_CONST);
-                        pMockBinding->iIdentifierHandle = -1;
+                        pMockBinding->iIdentifierHandle = STRUCTLIKE_MOCK_BINDING_INCLUSION;
                         pMockBinding->pType = g_pCoreTypesInfo[ECORETYPE_TYPE];
                         pMockBinding->info.uIRandMetaFlags = IRFLAG_TC_ONLY | IRFLAG_TC_SEMANTIC_CONST | IRFLAG_TC_BINDING_INSTANCE;
                         pMockBinding->info.metaValue.knownValue.pType = pAsIncludedStructLike;
@@ -2557,15 +2457,13 @@ local_func void set_global_binding_in_error(int iIdentifierHandle, u64 uHash,
     pBinding->uScopeAndLocation = (uRegistrationPos << 8) | pTCContext->eGlobalDeclScope;
     pTCContext->pIsolatedSourceFile->vecAllGlobalBindings.append(pBinding);
     pTCContext->pNamespace->mapAllGlobalDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-    if (pTCContext->eGlobalDeclScope <= EScopeKind::SCOPEKIND_GLOBAL_PACKAGE) {
+    pTCContext->pNamespace->mapAllBindingsInclUsing.insert(iIdentifierHandle, pBinding);
+    if (pTCContext->eGlobalDeclScope != EScopeKind::SCOPEKIND_GLOBAL_PRIVATE) {
         pTCContext->pNamespace->mapAccessibleDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-        if (pTCContext->eGlobalDeclScope == EScopeKind::SCOPEKIND_GLOBAL_PUBLIC)
-            pTCContext->pNamespace->mapPublicDeclarationsById.insert(iIdentifierHandle, uRegistrationPos);
-    } else {
-        Assert_(pTCContext->eGlobalDeclScope == EScopeKind::SCOPEKIND_GLOBAL_PRIVATE);
+        pTCContext->pNamespace->mapAccessibleBindingsInclUsing.insert(iIdentifierHandle, pBinding);
     }
 
-    pTCContext->pNamespace->setOfNewlyDeclaredGlobalIdentifiers.insert(iIdentifierHandle);
+    pTCContext->setOfNewlyDeclaredIdentifiers.insert(iIdentifierHandle);
 }
 
 // This function is to be called specially for errors in a declaration statement.
@@ -2588,7 +2486,7 @@ local_func ETCResult set_declaration_in_error(TmpTCNode* tAllDeclLhv, u8 uDeclLh
                 int iIdentifierHandle = get_id_from_decl_node(pDecl, pTCStatement);
                 u64 uHash = get_map_hash(iIdentifierHandle);
                 ValueBinding* bAlreadyFound = find_binding_within_namespace(iIdentifierHandle, uHash,
-                    (ReferencedNamespace*)pTCContext->pNamespace, false, pTCContext);
+                    pTCContext->pNamespace, false, pTCContext); // Cleanup: really 'false' check parents there ?
                 if (!bAlreadyFound) { // if already found, we'll here have an already found error, but we'll not force that
                                       //   existing binding to be modified. This may make different schedules produce different error-results
                                       //   for a same source, maybe (TODO: CLEANUP ?) but we'll only register the *new* ones as in error
@@ -2612,6 +2510,9 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
         if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETYPEKIND_ENUM) {
             return_error(pMainNode, pTCStatement, pTCContext, CERR_INVALID_DECLARATION_IN_ENUM,
                 "typecheck_declaration_statement() : cannot declare var or const within an enumerate. Use single identifiers, with explicit values set using the '=' token");
+        } else { Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETYPEKIND_STRUCTLIKE);
+            if (bIsConstant)
+                pTCContext->uFlags |= CTXFLAG_CURRENT_TC_STRUCTCONST;
         }
     }
 
@@ -2645,8 +2546,8 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
             Assert_(get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE); // enums ruled out at this point
             bDeclareAsStructLike = true;
         }
-        bool bAllowShadowingOfLocals = bDeclareAsProcLocal ? does_tc_ctx_allow_shadowing_locals(pTCContext, declAttr) : false;
-        bool bAllowShadowingOfGlobals = does_tc_ctx_allow_shadowing_globals(pTCContext, declAttr);
+        bool bAllowShadowingOfLocals = !bDeclareAsProcLocal; // TODO: @shadowing tag to override this
+        bool bAllowShadowingOfGlobals = !is_ctx_structlike_compound(pTCContext);
         SourceFileDescAndState* pGlobalDeclFile = pTCContext->pIsolatedSourceFile;
         int allIds[32]; Assert_(uDeclLhvNodeCount <= 32u);
         
@@ -2701,27 +2602,16 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
 
                 if (!bAllowShadowingOfGlobals) {
                     // Checking that identifier is not already defined within globals, if not allowed to shadow globals
-                    ValueBinding* pAlreadyFoundGlobal = find_binding_within_namespace(iIdentifierHandle, uHash,
-                        (ReferencedNamespace*)pTCContext->pNamespace, true, pTCContext);
+                    ValueBinding* pAlreadyFoundGlobal = find_binding_within_namespace(iIdentifierHandle, uHash, pTCContext->pNamespace, 
+                        true, // also checking for parents of current namespace
+                        pTCContext,
+                        true); // also adding to setLocalUnshadowing on each such visited...
                     if (pAlreadyFoundGlobal) {
                         emit_error(pDecl, pTCStatement, pTCContext, RERR_ALREADY_DECLARED_IDENTIFIER,
                             "typecheck_declaration_statement() : already declared identifier (at global scope)");
                         return set_declaration_in_error(tAllDeclLhv, uDeclLhvNodeCount, pMainNode,
                             bIsConstant, pTCStatement, pTCContext);
                     }
-                    // Moreover adding those to a set of identifiers which may be checked for shadowing against globals *after the fact*
-                    //   ... since we allow out of order declarations. Ofc. Why try simple.
-                    if (bDeclareAsProcLocal || bDeclareAsStructLike) {
-                        u64 uCurrentNamespaceId = get_namespace_id((ReferencedNamespace*)pTCContext->pNamespace);
-                        auto itFound = pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.find(uCurrentNamespaceId);
-                        if (itFound == pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.end()) {
-                            TmpSet<int> newSetForThisNamespace;
-                            newSetForThisNamespace.init(FireAndForgetArenaAlloc(pTCContext->pIsolatedSourceFile->localArena));
-                            itFound = pTCContext->pIsolatedSourceFile->mapSetLocalUnshadowingByNamespaceUID.insert_not_present(
-                                get_map_hash(uCurrentNamespaceId), uCurrentNamespaceId, newSetForThisNamespace);
-                        }
-                        itFound.value().insertHashed(uHash, iIdentifierHandle);
-                    } 
                 }
 
             } else {
@@ -2871,8 +2761,8 @@ local_func ETCResult typecheck_declaration_statement(TmpTCNode* pMainNode, bool 
                         const TypeInfo* pExplicitType = type_from_type_node(pTypeValue);
                         if (get_type_kind(pExplicitType) == ETYPEKIND_STRUCTLIKE) {
                             const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pExplicitType;
-                            if (!is_structlike_type_footprint_available(pAsStructLike)) {
-                                return add_waiting_task_for_compound_body(pAsStructLike, tAllTypesRhv[uType].uNodeIndexInStatement, pTCContext);
+                            if (!is_structlike_type_footprint_available_otherwise_return_locked_for_wait_if_nonlocal(pAsStructLike, pTCContext)) {
+                                return add_waiting_task_for_compound_body_already_event_locked_iff_other_file(pAsStructLike, tAllTypesRhv[uType].uNodeIndexInStatement, pTCContext);
                             } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME) {
                                 emit_error((tAllTypesRhv + uType),pTCStatement,pTCContext,CERR_COMPOUND_TYPE_IN_ERROR,
                                     "do_var_binding() : cannot finalize var declaration as a struct-like base-type which happens to be in error"); \

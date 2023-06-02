@@ -81,6 +81,7 @@ my_tuesday :: testenum.TUESDAY		// #if ... statements child further-indentation 
 	false :: should_not(compile)	// Won't be typechecked... but should however correctly *parse*, otherwise error
 #endif
 
+/*
 teststruct :: struct
 	a as int
 	b :: 52
@@ -92,6 +93,7 @@ teststruct2 :: struct
 	including union
 		_f as f64
 		_u as u64
+*/
 
 //---------------------------------------------------
 // Refresh contents of our color buffer to the window display

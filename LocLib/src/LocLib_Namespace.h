@@ -35,78 +35,82 @@
 enum ESourceCompState : u32 {
     ESOURCE_COMP_STATE_NOT_STARTED,                // state of the root namespace of a file, when not yet parsed
     ESOURCE_COMP_STATE_DONE_PARSED,                // starting state of any namespace declared in an already parsed file
-    ESOURCE_COMP_STATE_DONE_LOCAL_DISCOVERY,       // state of a namespace where all locally defined stuff are known gathered and named (but barring other referenced namespace, even those with *using*)
-    ESOURCE_COMP_STATE_DONE_DISCOVERY_USING,       // state of a namespace where all named stuff are known (including those behind *using*)
+    ESOURCE_COMP_STATE_DONE_ACCESSIBLE_DISCOVERY,  // state of a namespace where all known non-private defined stuff are known gathered and named (incl. 'using')
+    ESOURCE_COMP_STATE_DONE_ALL_DISCOVERY,         // state of a namespace where all defined stuff are known gathered and named (incl. 'using')
     ESOURCE_COMP_STATE_DONE_TYPECHECKED,           // state of the root namespace of a file, when no remaining TC tasks are set upon it
     ESOURCE_COMP_STATE_SCANNER_ERROR,              // state of the root namespace of a file, when a scanner error occurred during parsing.
-};
 
-struct TCNamespace;
-struct ReferencedNamespace;
-// A laggued state stores the known bindings declared on a namespace, as seen by other source files.
-// There is one lagguedState for each TCNamespace.
-//      At start, it was designed so that there is also one distinct lagguedState for each different source file referencing it.
-//      Currently, though, all namespaces having knowledge of another go through that same, unique 'lagguedState', foreplanned behind
-//         a read/write lock (when we implement MultiThread).
-// Usage: 
-//    Once a source file has finished a TC-task which has found at least one new declaration within a namespace, it
-//       takes a lock on its laggued state, updates it, then release the lock (and scheduler can notify of its update to all interested)
-// Initial Plan:
-//    Once scheduler knows that a file has no currently working TC tasks, it can take a lock on referenced laggued states for each other file,
-//       update its own local copy of the laggued state, then release the lock (and scheduler can maybe wake tasks waiting on identifiers)
-// Current Plan:
-//    All files accessing namespaces from other files take a read lock on referenced laggued state *at the time of each access*
-//
-struct LaggedNamespaceState {
-    ESourceCompState uDiscoveryProgress;                                        // for recording discovery progress
-    u32 uVersion;                                                               // additional counter of "abritrary"-length for recording and *discriminating* discovery progress
-    //TmpMap<u64, ReferencedNamespace*> mapKnownReferencedNamespaces;           // This is the map of all namespaces having been directly bound to a namespace binding, or declared as 'using', within this namespace.
-    TmpMap<int, u32> mapKnownPublicDeclarationsById;                            // this map points to the binding repository of the *original source file*
-    TmpMap<int, u32> mapKnownAccessibleDeclarationsById;                        // this map points to the binding repository of the *original source file*, 
-    //TmpArray<u64> vecKnownUsedNamespaces;                                     // These are all the namespaces which are known declared as *using*
-    TmpArray<ReferencedNamespace*> vecKnownUsedNamespaces;                      // These are all the namespaces which are known declared as *using*
-    TmpArray<const TypeInfo_Enum*> vecKnownUsedEnums;                           // These are all the *enums* which are known declared as *using*
-
-    // TODO: CLEANUP: Currently not really used
-    TmpMap<u64, ReferencedNamespace*> mapKnownOthersUsingThis;                  // These are all the namespaces which are known *directly* 'using' this one
+//    ESOURCECOMPSTATEFLAG_BEING_LOCKED = 0x4000'0000u,     // temporary flag (at interplay with atomic handling of changes) while we're adding tasks waiting on its completion
 };
-
-__declspec(align(8))
-struct ReferencedNamespace {
-    TCNamespace* pOrigNamespace;            // The TCNamespace, directly in the file having defined it (can also be the root namespace for said file). Can also point to 'itself' in case the referencing is file-to-same-file.
-    LaggedNamespaceState laggedState;       // The "referenced" state of the namespace, either updated locally to the file, or as a copy of some version of it for other files.
-};
-static_assert(alignof(ReferencedNamespace) >= 4, "ReferencedNamespace alignment shall be at least 4 for usage as ScopedEntityHandle");
 
 struct SourceFileDescAndState;
+__declspec(align(8))
 struct TCNamespace {
-    ReferencedNamespace asRef; // with pOrigNamespace pointing to 'this'. TODO: a specific lock on its lagged state.
     TCNamespace* pParent;                           // Namespaces can be nested. This thus points is the parent for current namespace. Can be null for root within a file.
     SourceFileDescAndState* pOriginalSourceFile;    // This is the sourcefile in which this namespace was *really* declared, not merely referenced
     u32 uRegistrationIndex;                         // This is the registration index of this namespace *within its original source file*
-    ESourceCompState eCompState;                    // ...
+    u32 volatile uTCProgress;                       // ESourceCompState
 
-    // Note: currently replaced by mapSetLocalUnshadowingByNamespaceUID, directly in source file.
-    //TmpSet<int> setLocalUnshadowing;                    // This is the set of all locals found while parsing procbodies within this direct namespace, which should be checked afterwards for name collisions
+    // 'setLocalUnshadowing' : This is the set of all locals found while parsing subordinate entities within this namespace,
+    //   which, although not part of the namespace proper, could result in name-collisions *after-the-fact* :
+    // Case 1: We check for a name within that subordinate entity. It is not present locally, but present in encompassing namespace:
+    //              we take the namespace.
+    // Case 2: We check for a name within that subordinate entity. It is present locally:
+    //              we take the local one.
+    // Case 3: We add a name to the subordinate entity, but it is present in the encompassing namespace already.
+    //              => allow ? disallow ?
+    // 
+    // If we have out of order discovery of the encompassing namespace, and any possible out of order discovery also within the subordinate entity
+    //    (directly or through non-blocking 'using' chains of other out-of-order discoveries from namespace or other entities), then we need to
+    //    disallow Case 3 : declaring a local identifier which is already present in the encompassing namespace. Otherwise, it could result in
+    //    already-successfully-typechecked expressions having taken the case-1 path, and similar expressions after local discovery taking
+    //    the case-2 path => NOGOOD !!
+    // But, to disallow for case 3 in that fully out-of-order environment, we need to also remember that any names in the subordinate were
+    //   forbidden to collide with the encompassing namespace in the first place... otherwise, there will be times where that 'shadowing' of
+    //   globals would be refused by the compiler (if it discovered the namespace-one first) while at other times it would be accepted 
+    //   (if the namespace one was not yet discovered at time of local declaration) => NOGOOD either !! (and to make things worse,
+    //   one behaviour or the other could be totally random in the presence of multithread...).
+    // 
+    // Note: we dropped out the idea of that "after-the-fact" local unshadowing for proc scopes and enums:
+    //   we indeed have sequential discovery within those, and thus by *allowing* shadowing of namespace globals, we just *solve* Case 3
+    //   by *not complaining, and overriding the binding afterwards in the sequence*. Which can never behave differently between runs.
+    //      Moreover, we can't declare 'using' a namespace within an enum...
+    //      And local scope are now blocking on namespace usage (even within same file)... so this prevents different used namespaces to
+    //        have to check against each other constantly if used locally in different procs.
+    //   
+    // However, structlike still have out of order decl 'requiring' something like that:
+    TmpSet<int> setLocalUnshadowing;
     
-    // Note: currently replaced by a simple vecUsedNamespaces (and vecKnownUsedNamespaces when laggued), which we'll walk recursively through namespace references if needed
-    //TmpMap<u64, ReferencedNamespace*> mapReferencedNamespaces;   // This is the map of all namespaces having been directly bound to a namespace binding, or declared as 'using', within this namespace.
-    
-    TmpMap<int, u32> mapPublicDeclarationsById;         // this map points to the binding repository of the *original source file*
     TmpMap<int, u32> mapAccessibleDeclarationsById;     // this map points to the binding repository of the *original source file*, and includes public, and package.
     TmpMap<int, u32> mapAllGlobalDeclarationsById;      // this map points to the binding repository of the *original source file*, and includes public, package and privates.
-    TmpArray<ReferencedNamespace*> vecAllUsedNamespaces;   // These are all the namespaces which are known declared as *using*
-    TmpArray<const TypeInfo_Enum*> vecAllUsedEnums;        // These are all the *enums* which are known declared as *using*
-    TmpArray<ReferencedNamespace*> vecAccessibleUsedNamespaces;   // These are the namespaces which are known declared as *using* outside of a private scope
-    TmpArray<const TypeInfo_Enum*> vecAccessibleUsedEnums;        // These are the *enums* which are known declared as *using* outside of a private scope
 
-    TmpSet<int> setOfNewlyDeclaredGlobalIdentifiers;    // global identifiers, newly declared on a TC pass, for fast-iteration to a lagged state (and waking up tasks).
+    TmpArray<TCNamespace*> vecAccessibleUsedNamespaces; // These are the namespaces which are known declared as *using* outside of a private scope
+    TmpArray<TCNamespace*> vecAllUsedNamespaces;        // These are all the namespaces which are known declared as *using*
 
-    // TODO: CLEANUP: Currently not really used
-    TmpMap<u64, ReferencedNamespace*> mapOthersUsingThis;    // These are all the namespaces which are *directly* 'using' this one
+    TmpArray<const TypeInfo_Enum*> vecAccessibleUsedEnums;      // These are the *enums* which are known declared as *using* outside of a private scope
+    TmpArray<const TypeInfo_Enum*> vecAllUsedEnums;             // These are all the *enums* which are known declared as *using*
 
-    u32 uCountGlobalTasksInTasksToLaunch;
-    u32 uCountGlobalTasksInWaitingTasks;
+    TmpArray<u32> vecChildrenNamespaces;                        // All nested (children) namespaces, by index in file local Namespace repo
+    TmpArray<u32> vecAllNamespacesInSameFileUsingSelf;          // All namespaces *in same file* currently using this one, by index in file local Namespace repo
+
+    TmpMap<int, ValueBinding*> mapAccessibleBindingsInclUsing;  // this map gathers all accessible bindings, incl. those from used namespaces and enums.
+    TmpMap<int, ValueBinding*> mapAllBindingsInclUsing;         // this map gathers all bindings, incl. those from used namespaces and enums, also incl. our privates.
+
+    TmpMap<TCWaitingReason, TmpArray<TCContext*>> mapTasksWaitingForGlobalIds;    // all tasks waiting for a global id to be found from that particular context (or one of its parents)
+
+    // Tasks remaining to be done before we can flag ourselves (and notify) as being done with either private or non-private declaration gathering
+    // Note: Those are indifferently waiting, or ready to lauch, or being TC'd. Will be decremented on task completion.
+    // => Can only be incremented when registering another wait => from a TC on same file => No lock needed !
+    u32 uCountGlobalAccessibleTasks;
+    u32 uCountGlobalPrivateTasks;
+
+    TmpArray<TCContext*> vecLocalTasksWaitingForCompletion;     // All tasks in same file waiting for this namespace's completion (assumed of private + accessible)
+    TmpArray<TCContext*> vecNonLocalTasksWaitingForCompletion;  // All tasks in other files waiting for this namespace's completion (of accessible)
+
+    i32 iPrimaryIdentifier;
+    u32 _pad0;
 };
+static_assert(alignof(TCNamespace) >= 4, "TCNamespace alignment shall be at least 4 for usage as ScopedEntityHandle");
+
 
 #endif // LOCLIB_NAMESPACE_H_

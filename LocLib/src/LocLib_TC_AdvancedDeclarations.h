@@ -123,7 +123,8 @@ local_func ETCResult typecheck_macro_or_paramdecl_to(TmpArray<ProcLikeParam>* io
                 Assert_(is_value_tc_only(pTypeNode->pIntrinsicValue));
                 pExplicitType = type_from_type_node(pTypeNode->pIntrinsicValue);
                 Assert_(get_type_kind(pExplicitType) < COUNT_TYPE_KINDS);
-                check_type_availability_may_return_wait_or_error(pExplicitType, pParam, pTCStatement, pTCContext, "Cannot typecheck a proc signature with");
+                check_type_footprint_availability_may_return_wait_or_error(pExplicitType, pParam, pTCStatement, pTCContext,
+                    "Cannot typecheck a proc signature with");
                 u16 uTypeErr = 0;
                 if (!is_allowed_as_runtime_type(pExplicitType, pTCContext, &uTypeErr)) {
                     // TODO: support for parametric types
@@ -155,7 +156,8 @@ local_func ETCResult typecheck_macro_or_paramdecl_to(TmpArray<ProcLikeParam>* io
         Assert_(is_value_tc_only(pParam->pIntrinsicValue));
         const TypeInfo* pExplicitType = type_from_type_node(pParam->pIntrinsicValue);
         Assert_(get_type_kind(pExplicitType) < COUNT_TYPE_KINDS);
-        check_type_availability_may_return_wait_or_error(pExplicitType, pParam, pTCStatement, pTCContext, "Cannot typecheck a proc signature with");
+        check_type_footprint_availability_may_return_wait_or_error(pExplicitType, pParam, pTCStatement, pTCContext,
+            "Cannot typecheck a proc signature with");
         u16 uTypeErr = 0;
         if (!is_allowed_as_runtime_type(pExplicitType, pTCContext, &uTypeErr)) {
             // TODO: support for parametric types
@@ -270,6 +272,8 @@ local_func ETCResult typecheck_proc_declaration(TmpTCNode* pExpr, TCStatement* p
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking a proclike definition"), pTCContext->pWorker);
 
+    if_expr_already_typechecked_phase1_recall_value_and_return_success(pExpr, pTCStatement, pTCContext);
+
     Assert_(eExpectation == EExpectedExpr::EXPECT_CONSTANT);
     TypeInfo_ProcLike resultingProcSign;
     ArenaRefPoint beforeTCSign = get_arena_ref_point(pTCContext->pWorker->tmpArena);
@@ -312,7 +316,7 @@ local_func ETCResult typecheck_proc_declaration(TmpTCNode* pExpr, TCStatement* p
 
             pRegistration->procResult.iPrimaryIdentifier = ERES_INVALID_ID; // will be assigned later at binding stage
             pRegistration->procResult.procSign = pProcSign;
-            pRegistration->procResult.uProcBodyTypechekingStatus = 0; // TODO ?
+            pRegistration->procResult.uProcBodyTypechekingStatus = EPROCSTATUS_NOT_NET_STARTED;
             pRegistration->procResult.uRegistrationIndex = pTCContext->pIsolatedSourceFile->vecAllProcBodies.size();
             pTCContext->pIsolatedSourceFile->vecAllProcBodies.append(pRegistration);
             pRegistration->procResult.iSourceFileIndex = pTCContext->pIsolatedSourceFile->iRegistrationIndex;
@@ -323,6 +327,8 @@ local_func ETCResult typecheck_proc_declaration(TmpTCNode* pExpr, TCStatement* p
             pRegistration->procResult.uIsForeignSource = 0uLL;
             pRegistration->procResult.foreignSymbolName = FFString { 0 };
             pRegistration->procResult.pGraphResult = 0;
+            pRegistration->procResult.vecLocalTasksWaitingForCompletion.init(localArena);
+            pRegistration->procResult.vecNonLocalTasksWaitingForCompletion.init(localArena);
 
             NodeValue* pProcDefValue = alloc_value_for(pExpr, EValueSlotOnNode::ENODEVALUESLOT_INTRINSIC, pTCStatement, pTCContext);
             pProcDefValue->pType = pProcSign;
@@ -340,6 +346,10 @@ local_func ETCResult typecheck_proc_declaration(TmpTCNode* pExpr, TCStatement* p
 
                 TCContext* pTypecheckBodyCtx = (TCContext*)alloc_from(localArena, 
                     sizeof(TCContext), alignof(TCContext));
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL9_VERBOSE, EventREPT_CUSTOM_HARDCODED(
+                    "Allocated new TC Task 0x%llx for typechecking proc body", reinterpret_cast<u64>(pTypecheckBodyCtx)),
+                    pTCContext->pWorker);
+
                 *((CompilationContext*)pTypecheckBodyCtx) = *((CompilationContext*)pTCContext);
                 pTypecheckBodyCtx->eKind = ETypecheckContextKind::ECTXKIND_PROCBODY;
                 pTypecheckBodyCtx->eBlockKind = ETypecheckBlockKind::EBLOCKKIND_SEQ;
@@ -358,12 +368,26 @@ local_func ETCResult typecheck_proc_declaration(TmpTCNode* pExpr, TCStatement* p
                 pTypecheckBodyCtx->pParentContext = 0;
                 pTypecheckBodyCtx->pVecOfGotoPlaceholdersToReturnPoint = 0;
 
+                pTypecheckBodyCtx->setOfNewlyDeclaredIdentifiers = {};
+
+                pTypecheckBodyCtx->uSizeOfVecUsingAccessibleEnumBefore = 0u;
+                pTypecheckBodyCtx->uSizeOfVecUsingAccessibleNamespaceBefore = 0u;
+                pTypecheckBodyCtx->uSizeOfVecUsingAllEnumBefore = 0u;
+                pTypecheckBodyCtx->uSizeOfVecUsingAllNamespaceBefore = 0u;
+                pTypecheckBodyCtx->uSizeOfVecChildrenNamespacesBefore = 0u;
+                pTypecheckBodyCtx->uSizeOfVecIncludedStructLikeBefore = 0u;
+
                 pTypecheckBodyCtx->uGlobalStatementOnHold = 0;
                 pTypecheckBodyCtx->mapLocalNodeInfoIfResumingCurrentStatement = {};
+                pTypecheckBodyCtx->waitingReason._packed = u64(EWR_NONE);
 
-                pTCContext->pIsolatedSourceFile->vecTCTasksToLaunch.append(pTypecheckBodyCtx);
+                pTypecheckBodyCtx->eTaskPrio = ETaskPriority::ETASKPRIO_LOW;
+                acquire_source_file_specific_task_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
+                pTCContext->pIsolatedSourceFile->tvecTCTasksToLaunchByPrio[ETaskPriority::ETASKPRIO_LOW].append(pTypecheckBodyCtx);
+                release_source_file_specific_task_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
             } else {
                 platform_log_error("*** registered proc with missing body", true);
+                pRegistration->procResult.uProcBodyTypechekingStatus = EPROCSTATUS_IN_ERROR_TC;
             }
 
         }
@@ -376,7 +400,9 @@ local_func ETCResult typecheck_compound_declaration(TmpTCNode* pExpr, TCStatemen
     EExpectedExpr eExpectation, UpwardsInference inferredFromBelow)
 {
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking a compound type definition"), pTCContext->pWorker);
-            
+    
+    if_expr_already_typechecked_phase1_recall_value_and_return_success(pExpr, pTCStatement, pTCContext);
+
     Assert_(eExpectation == EExpectedExpr::EXPECT_CONSTANT);
     u8 uTypeKind = u8(pExpr->pTCNode->ast.uNodeKindAndFlags >> 8);
 
@@ -421,8 +447,11 @@ local_func ETCResult typecheck_compound_declaration(TmpTCNode* pExpr, TCStatemen
                 pRegistration->pStatementWithSignature->vecNodeValues.append_all(pTCStatement->vecNodeValues);
                 pRegistration->iPrimaryIdentifier = ERES_INVALID_ID; // will be assigned later at binding stage
                 pRegistration->uTCProgress = ECOMPOUND_NOT_YET_STARTED;
-                pRegistration->setWaitingConstOnly.init(localArena);
-                pRegistration->setWaitingPossiblyRuntime.init(localArena);
+                pRegistration->vecLocalTasksWaitingForCompletion.init(localArena);
+                pRegistration->vecNonLocalTasksWaitingForCompletion.init(localArena);
+                pRegistration->uCountEnsuredConstTasks = 0u;
+                pRegistration->uCountPossiblyRuntimeTasks = 0u;
+                pRegistration->pSourceFile = pTCContext->pIsolatedSourceFile;
 
                 u32 uRegistrationIndex = pTCContext->pIsolatedSourceFile->vecAllCompoundDef.size();
                 if (uRegistrationIndex > 0x0000'FFFFu) {
@@ -446,6 +475,10 @@ local_func ETCResult typecheck_compound_declaration(TmpTCNode* pExpr, TCStatemen
 
                     TCContext* pTypecheckStructBodyCtx = (TCContext*)alloc_from(localArena, 
                         sizeof(TCContext), alignof(TCContext));
+                    BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL9_VERBOSE, EventREPT_CUSTOM_HARDCODED(
+                        "Allocated new TC Task 0x%llx for typechecking struct body", reinterpret_cast<u64>(pTypecheckStructBodyCtx)),
+                        pTCContext->pWorker);
+                    
                     *((CompilationContext*)pTypecheckStructBodyCtx) = *((CompilationContext*)pTCContext);
                     pTypecheckStructBodyCtx->eKind = ETypecheckContextKind::ECTXKIND_COMPOUND;
                     pTypecheckStructBodyCtx->eBlockKind = ETypecheckBlockKind::EBLOCKKIND_BASE;
@@ -464,13 +497,30 @@ local_func ETCResult typecheck_compound_declaration(TmpTCNode* pExpr, TCStatemen
                     pTypecheckStructBodyCtx->pVecOfGotoPlaceholdersToReturnPoint = 0;
                     pTypecheckStructBodyCtx->pCompoundToTC = pRegistration;
 
+                    pTypecheckStructBodyCtx->setOfNewlyDeclaredIdentifiers = {}; // will be init later, at task start
+
+                    pTypecheckStructBodyCtx->uSizeOfVecUsingAccessibleEnumBefore = 0u;
+                    pTypecheckStructBodyCtx->uSizeOfVecUsingAccessibleNamespaceBefore = 0u;
+                    pTypecheckStructBodyCtx->uSizeOfVecUsingAllEnumBefore = 0u;
+                    pTypecheckStructBodyCtx->uSizeOfVecUsingAllNamespaceBefore = 0u;
+                    pTypecheckStructBodyCtx->uSizeOfVecChildrenNamespacesBefore = 0u;
+                    pTypecheckStructBodyCtx->uSizeOfVecIncludedStructLikeBefore = 0u;
+
                     pTypecheckStructBodyCtx->uGlobalStatementOnHold = 0;
                     pTypecheckStructBodyCtx->mapLocalNodeInfoIfResumingCurrentStatement = {};
+                    pTypecheckStructBodyCtx->waitingReason._packed = u64(EWR_NONE);
 
-                    pTCContext->pIsolatedSourceFile->vecTCTasksToLaunch.append(pTypecheckStructBodyCtx);
-
+                    pTypecheckStructBodyCtx->eTaskPrio = ETaskPriority::ETASKPRIO_MED;
+                    if (!is_ctx_global(pTCContext) && !is_ctx_compound(pTCContext))
+                        pTypecheckStructBodyCtx->eTaskPrio = ETaskPriority::ETASKPRIO_LOW;
+                    acquire_source_file_specific_task_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
+                    pTCContext->pIsolatedSourceFile->tvecTCTasksToLaunchByPrio[pTypecheckStructBodyCtx->eTaskPrio].append(pTypecheckStructBodyCtx);
+                    release_source_file_specific_task_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
+                    pRegistration->uCountPossiblyRuntimeTasks = 1u;
                 } else {
                     platform_log_error("*** registered struct or union with missing body", true);
+                    pNewStructType->_coreFlags |= COMPOUNDFLAG_BODY_IN_ERROR|COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME;
+                    pRegistration->uTCProgress = ECOMPOUND_DONE_ALL;
                 }
 
                 return ETCResult::ETCR_SUCCESS;
@@ -531,8 +581,11 @@ local_func ETCResult typecheck_compound_declaration(TmpTCNode* pExpr, TCStatemen
             pRegistration->pStatementWithSignature->vecNodeValues.append_all(pTCStatement->vecNodeValues);
             pRegistration->iPrimaryIdentifier = ERES_INVALID_ID; // will be assigned later at binding stage
             pRegistration->uTCProgress = ECOMPOUND_NOT_YET_STARTED;
-            pRegistration->setWaitingConstOnly.init(localArena);
-            pRegistration->setWaitingPossiblyRuntime.init(localArena);
+            pRegistration->vecLocalTasksWaitingForCompletion.init(localArena);
+            pRegistration->vecNonLocalTasksWaitingForCompletion.init(localArena);
+            pRegistration->uCountEnsuredConstTasks = 0u;
+            pRegistration->uCountPossiblyRuntimeTasks = 0u;
+            pRegistration->pSourceFile = pTCContext->pIsolatedSourceFile;
 
             u32 uRegistrationIndex = pTCContext->pIsolatedSourceFile->vecAllCompoundDef.size();
             if (uRegistrationIndex > 0x0000'FFFFu) {
@@ -556,6 +609,10 @@ local_func ETCResult typecheck_compound_declaration(TmpTCNode* pExpr, TCStatemen
 
                 TCContext* pTypecheckEnumBodyCtx = (TCContext*)alloc_from(localArena, 
                     sizeof(TCContext), alignof(TCContext));
+                BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL9_VERBOSE, EventREPT_CUSTOM_HARDCODED(
+                    "Allocated new TC Task 0x%llx for typechecking enum body", reinterpret_cast<u64>(pTypecheckEnumBodyCtx)),
+                    pTCContext->pWorker);
+
                 *((CompilationContext*)pTypecheckEnumBodyCtx) = *((CompilationContext*)pTCContext);
                 pTypecheckEnumBodyCtx->eKind = ETypecheckContextKind::ECTXKIND_COMPOUND;
                 pTypecheckEnumBodyCtx->eBlockKind = ETypecheckBlockKind::EBLOCKKIND_BASE;
@@ -575,13 +632,29 @@ local_func ETCResult typecheck_compound_declaration(TmpTCNode* pExpr, TCStatemen
                 pTypecheckEnumBodyCtx->pVecOfGotoPlaceholdersToReturnPoint = 0;
                 pTypecheckEnumBodyCtx->pCompoundToTC = pRegistration;
 
+                pTypecheckEnumBodyCtx->setOfNewlyDeclaredIdentifiers = {};
+
+                pTypecheckEnumBodyCtx->uSizeOfVecUsingAccessibleEnumBefore = 0u;
+                pTypecheckEnumBodyCtx->uSizeOfVecUsingAccessibleNamespaceBefore = 0u;
+                pTypecheckEnumBodyCtx->uSizeOfVecUsingAllEnumBefore = 0u;
+                pTypecheckEnumBodyCtx->uSizeOfVecUsingAllNamespaceBefore = 0u;
+                pTypecheckEnumBodyCtx->uSizeOfVecChildrenNamespacesBefore = 0u;
+                pTypecheckEnumBodyCtx->uSizeOfVecIncludedStructLikeBefore = 0u;
+
                 pTypecheckEnumBodyCtx->uGlobalStatementOnHold = 0;
                 pTypecheckEnumBodyCtx->mapLocalNodeInfoIfResumingCurrentStatement = {};
 
-                pTCContext->pIsolatedSourceFile->vecTCTasksToLaunch.append(pTypecheckEnumBodyCtx);
-
+                pTypecheckEnumBodyCtx->eTaskPrio = ETaskPriority::ETASKPRIO_MED;
+                if (!is_ctx_global(pTCContext) && !is_ctx_compound(pTCContext))
+                    pTypecheckEnumBodyCtx->eTaskPrio = ETaskPriority::ETASKPRIO_LOW;
+                acquire_source_file_specific_task_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
+                pTCContext->pIsolatedSourceFile->tvecTCTasksToLaunchByPrio[pTypecheckEnumBodyCtx->eTaskPrio].append(pTypecheckEnumBodyCtx);
+                release_source_file_specific_task_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
+                pRegistration->uCountEnsuredConstTasks = 1u;
             } else {
                 platform_log_error("*** registered enum with missing body", true);
+                pNewEnumType->_coreFlags |= COMPOUNDFLAG_BODY_IN_ERROR;
+                pRegistration->uTCProgress = ECOMPOUND_DONE_ALL;
             }
 
             return ETCResult::ETCR_SUCCESS;

@@ -313,211 +313,6 @@ local_func ETCResult tc_rdtsc_builtin(TmpTCNode* pExpr, TmpTCNode* pBuiltin, Tmp
         "tc_rdtsc_builtin() : not yet implemented");
 }
 
-/*
-local_func ETCResult tc_tmp_print_builtin(TmpTCNode* pExpr, TmpTCNode* pBuiltin, TmpTCNode* tAllInParams, u8 uInParamsCount,
-    TCStatement* pTCStatement, TCContext* pTCContext, EExpectedExpr eExpectation, UpwardsInference inferredFromBelow,
-    u32 uIndexOfOptNodeChainParent, TmpTCNode* tAllExpr, u8* ioNodeCount, EInvocFormResultCount eRetCount, bool* oWasMacroExpansion)
-{
-    trace_typechecker_2("handling the 'print' tmp builtin");
-
-    if (LIKELY(uInParamsCount == 2)) {
-        if (tAllInParams[1].pIntrinsicValue->pType != g_pCoreTypesInfo[ECORETYPE_BOOL]) {
-            return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                "tc_tmp_print_builtin() : second param (ends with endline) must be of type 'bool'");
-        }
-        if (eRetCount != EInvocFormResultCount::EINVOC_NO_RETURN) {
-            return_error(pExpr, pTCStatement, pTCContext, CERR_EXPECTED_EXPRESSION,
-                "tc_tmp_print_builtin() : expecting an expression, cannot call a builtin with no return values");
-        }
-        if (0 == pTCContext->pProcResult) {
-            return_error(pExpr, pTCStatement, pTCContext, CERR_SEQ_STATEMENT_WHEN_EXPECTING_CTEVAL_STATEMENT,
-                "tc_tmp_print_builtin() : cannot invoke 'print' outside of a proc body");
-        }
-
-        u32 uLastIR = pTCStatement->uLastIRorGlobalTCResult;
-
-        ETypeKind eTypeKind;
-        const TypeInfo* pUnaliasedFirst = unalias_ext(tAllInParams[0].pIntrinsicValue->pType, &eTypeKind);
-        switch (eTypeKind) {
-            case ETYPEKIND_INTEGRAL: {
-                if (pUnaliasedFirst == &g_compint_type_info) {
-                    Assert_(is_value_a_known_const(tAllInParams[0].pIntrinsicValue));
-                    if (tAllInParams[0].uFlagsWhenKnownConst & CONSTFLAG_IS_EMBEDDED) {
-                        bool bUnused;
-                        u32 uIRofBaseValue = get_ir_immediate_or_tmp_binding_for_u64(
-                            tAllInParams[0].whenKnownConst.uEmbeddedValue, pTCStatement, pTCContext, &bUnused);
-                        if (tAllInParams[0].uFlagsWhenKnownConst & CONSTFLAG_INT_IS_NEGATIVE)
-                            ir_emit_tmp_print_codepoint(ir_make_positive_int_immediate(u32('-')),
-                                pTCContext->pProcResult, pTCContext);
-                        uLastIR = ir_emit_tmp_print_unsigned(uIRofBaseValue, 0x03u,
-                                pTCContext->pProcResult, pTCContext);
-                    } else {
-                        // TODO
-                        return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                            "tc_tmp_print_builtin() : not yet implemented for large compints");
-                    }
-                } else {
-                    ETCResult checkReify = do_reify(&(tAllInParams[0]), pUnaliasedFirst, false, pTCStatement, pTCContext);
-                    success_or_return_wait_or_error(checkReify, pExpr->pTCNode);
-                    Assert_(is_node_already_type_casted(tAllInParams[0].pTCNode));
-                    Assert_(tAllInParams[0].pFinalValue->uIR != INVALID_IR_CODE);
-                    u8 uFormat = get_ir_format(pUnaliasedFirst);
-                    if (is_signed_(pUnaliasedFirst)) {
-                        uLastIR = ir_emit_tmp_print_signed(tAllInParams[0].pFinalValue->uIR, uFormat,
-                                pTCContext->pProcResult, pTCContext);
-                    } else if (is_unsigned_(pUnaliasedFirst)) {
-                        uLastIR = ir_emit_tmp_print_unsigned(tAllInParams[0].pFinalValue->uIR, uFormat,
-                                pTCContext->pProcResult, pTCContext);
-                    } else { Assert_(is_raw_integral_(pUnaliasedFirst));
-                        if (pUnaliasedFirst == g_pCoreTypesInfo[ECORETYPE_RAWPTR]) {
-                            uLastIR = ir_emit_tmp_print_rawptr(tAllInParams[0].pFinalValue->uIR,
-                                    pTCContext->pProcResult, pTCContext);
-                        } else if (pUnaliasedFirst == g_pCoreTypesInfo[ECORETYPE_CODEPOINT]) {
-                            uLastIR = ir_emit_tmp_print_codepoint(tAllInParams[0].pFinalValue->uIR,
-                                    pTCContext->pProcResult, pTCContext);
-                        } else if (pUnaliasedFirst == g_pCoreTypesInfo[ECORETYPE_BOOL]) {
-                            uLastIR = ir_emit_tmp_print_bool(tAllInParams[0].pFinalValue->uIR,
-                                    pTCContext->pProcResult, pTCContext);
-                        } else {
-                            uLastIR = ir_emit_tmp_print_raw(tAllInParams[0].pFinalValue->uIR, uFormat,
-                                    pTCContext->pProcResult, pTCContext);
-                        }
-                    }
-                }
-            } break;
-
-            case ETYPEKIND_FLOATINGPOINT: {
-                // TODO
-                return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                    "tc_tmp_print_builtin() : not yet implemented for floating point types");
-            } break;
-
-            case ETYPEKIND_STRINGRELATED: {
-                const TypeInfo_String* pAsString = (const TypeInfo_String*)pUnaliasedFirst;
-                u32 uBaseAddressIR;
-                if (is_value_a_known_const(tAllInParams[0].pIntrinsicValue) &&
-                        is_string_related_c_terminated(pAsString, tAllInParams[0].whenKnownConst,
-                            tAllInParams[0].uFlagsWhenKnownConst, pTCContext)) {
-                    ETCResult checkReify = do_reify(&(tAllInParams[0]), pUnaliasedFirst, false, pTCStatement, pTCContext);
-                    success_or_return_wait_or_error(checkReify, pExpr->pTCNode);
-                    Assert_(is_node_already_type_casted(tAllInParams[0].pTCNode));
-                    Assert_(tAllInParams[0].pFinalValue->uIR != INVALID_IR_CODE);
-                    uBaseAddressIR = tAllInParams[0].pFinalValue->uIR;
-                    uLastIR = ir_emit_tmp_print_cstring(uBaseAddressIR, pTCContext->pProcResult, pTCContext);
-                } else {
-                    u32 uByteLengthIR;
-                    if (pAsString->_coreFlags & STRINGFLAG_IS_COMPACT) {
-                        ETCResult checkReify = do_reify(&(tAllInParams[0]), pUnaliasedFirst, false, pTCStatement, pTCContext);
-                        success_or_return_wait_or_error(checkReify, pExpr->pTCNode);
-                        Assert_(is_node_already_type_casted(tAllInParams[0].pTCNode));
-                        Assert_(tAllInParams[0].pFinalValue->uIR != INVALID_IR_CODE);
-                        uBaseAddressIR = tAllInParams[0].pFinalValue->uIR;
-                        u32 u32bBeforeBaseAddress = ir_emit_standard_binop(IRIT_SUB, 0x03, uBaseAddressIR,
-                            ir_make_positive_int_immediate(4u), pTCContext->pProcResult, pTCContext);
-                        uByteLengthIR = ir_emit_deref(u32bBeforeBaseAddress, 0x02, 2u, pTCContext->pProcResult, pTCContext);
-                    } else {
-                        // Reify as **referencable**:
-                        ETCResult checkReify = do_reify(&(tAllInParams[0]), pUnaliasedFirst, true, pTCStatement, pTCContext);
-                        success_or_return_wait_or_error(checkReify, pExpr->pTCNode);
-                        Assert_(is_node_already_type_casted(tAllInParams[0].pTCNode));
-                        Assert_(tAllInParams[0].pFinalValue->uIR != INVALID_IR_CODE);
-                        u32 uBaseIR = tAllInParams[0].pFinalValue->uIR;
-                        Assert_(get_ir_format(tAllInParams[0].pFinalValue->pType) == 0x03u);
-                        uBaseAddressIR = uBaseIR; // Since same IR format, then address is indeed directly accessible 'at' base.
-                        uByteLengthIR = ir_emit_offset_ext(uBaseIR, 0x02, 0x03, 1u, 0u, 2u, pTCContext->pProcResult, pTCContext);
-                        ir_emit_proc_param_on_caller_side(ir_make_positive_int_immediate(2u), 0x02, 1u,
-                            pTCContext->pProcResult, pTCContext);
-                        // => 'uByteLengthIR' now **references** 2x32b after base => where our 32b length is stored after address
-                    }
-                    uLastIR = ir_emit_tmp_print_bytes(uBaseAddressIR, uByteLengthIR, pTCContext->pProcResult, pTCContext);
-                }
-            } break;
-
-            case ETYPEKIND_POINTER: {
-                
-                // TODO
-                return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                    "tc_tmp_print_builtin() : not yet implemented for pointer types");
-            } break;
-
-            case ETYPEKIND_STRUCTLIKE: {
-                const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pUnaliasedFirst;
-                if (!is_structlike_type_footprint_available(pAsStructLike)) {
-                    return add_waiting_task_for_compound_body(pAsStructLike, tAllInParams[0].uNodeIndexInStatement, pTCContext);
-                } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME) {
-                    return_error(pExpr, pTCStatement, pTCContext, CERR_COMPOUND_TYPE_IN_ERROR,
-                        "tc_tmp_print_builtin() : cannot print struct instance with type in error");
-                }
-                ir_emit_tmp_print_codepoint(ir_make_positive_int_immediate(u32('{')), pTCContext->pProcResult, pTCContext);
-                u32 uRuntimeCount = pAsStructLike->uRuntimeMemberCount;
-                if (uRuntimeCount) {
-                    ValueHolder hackedValue;
-                    ValueHolder hackedFalseSecond;
-                    TmpTCNode tmp0 = tAllInParams[0];
-                    TmpTCNode tmp1 = tAllInParams[1];
-                    defer { tAllInParams[0] = tmp0; tAllInParams[1] = tmp1; };
-                    hackedFalseSecond.pType = g_pCoreTypesInfo[ECORETYPE_BOOL];
-                    hackedFalseSecond.uFlags = VALUEHOLDER_FLAG_IS_CONST|CONSTFLAG_IS_EMBEDDED;
-                    hackedFalseSecond.whenConstOrBound.uEmbeddedValue = 0uLL;
-                    hackedFalseSecond.uIR = INVALID_IR_CODE;
-                    tAllInParams[1].pTCNode->ast.uNodeKindAndFlags &= ~ENODEKINDFLAG_IS_TYPECHECKED_PHASE2;
-                    tAllInParams[1].pIntrinsicValue = &hackedFalseSecond;
-                    tAllInParams[1].uFlagsWhenKnownConst = CONSTFLAG_IS_EMBEDDED;
-                    tAllInParams[1].whenKnownConst.uEmbeddedValue = 0uLL;
-                    for (u32 uIndex = 0u; uIndex < uRuntimeCount; uIndex++) {
-                        init_value_as_known_elem_in_structlike(&hackedValue, uIndex, tmp0.pIntrinsicValue, pAsStructLike, pTCContext);
-                        tAllInParams[0].pTCNode->ast.uNodeKindAndFlags &= ~ENODEKINDFLAG_IS_TYPECHECKED_PHASE2;
-                        tAllInParams[0].pIntrinsicValue = &hackedValue;
-                        consolidateValue(&hackedValue, &(tAllInParams[0]), pTCStatement, pTCContext, 0, AConstOrBoundValue{}, 0u);
-                        ETCResult eResult = tc_tmp_print_builtin(pExpr, pBuiltin, tAllInParams, uInParamsCount,
-                            pTCStatement, pTCContext, eExpectation, inferredFromBelow, uIndexOfOptNodeChainParent,
-                            tAllExpr, ioNodeCount, eRetCount, oWasMacroExpansion);
-                        uLastIR = pTCStatement->uLastIRorGlobalTCResult;
-                        success_or_return_wait_or_error(eResult, pExpr->pTCNode);
-                        if (uIndex < uRuntimeCount-1u) {
-                            ir_emit_tmp_print_codepoint(ir_make_positive_int_immediate(u32(',')), pTCContext->pProcResult, pTCContext);
-                            ir_emit_tmp_print_codepoint(ir_make_positive_int_immediate(u32(' ')), pTCContext->pProcResult, pTCContext);
-                        }
-                    }
-                }
-                uLastIR = ir_emit_tmp_print_codepoint(ir_make_positive_int_immediate(u32('}')), pTCContext->pProcResult, pTCContext);
-            } break;
-
-            default:
-                return_error(pExpr, pTCStatement, pTCContext, FERR_NOT_YET_IMPLEMENTED,
-                    "tc_tmp_print_builtin() : not yet implemented for this param type");
-        }
-
-        if (is_value_a_known_const(tAllInParams[1].pIntrinsicValue)) {
-            Assert_(tAllInParams[1].uFlagsWhenKnownConst & CONSTFLAG_IS_EMBEDDED);
-            Assert_(tAllInParams[1].whenKnownConst.uEmbeddedValue <= 1uLL);
-            if (tAllInParams[1].whenKnownConst.uEmbeddedValue) {
-                uLastIR = ir_emit_tmp_print_eol(pTCContext->pProcResult, pTCContext);
-            }
-        } else {
-            Assert_(!is_value_const(tAllInParams[1].pIntrinsicValue));
-            Assert_(tAllInParams[1].pIntrinsicValue->uIR != INVALID_IR_CODE);
-            u32 uBranch = ir_emit_branch_on_value_placeholder(tAllInParams[1].pIntrinsicValue->uIR, 0x00u,
-                0, pTCContext->pProcResult, pTCContext);
-            uLastIR = ir_emit_tmp_print_eol(pTCContext->pProcResult, pTCContext);
-            TCSeqSourceBlock* pCurrentAsSeq = (TCSeqSourceBlock*)pTCContext->pCurrentBlock;
-            pCurrentAsSeq->vecAwaitingPlaceholdersToNextInstruction.append(uBranch);
-        }
-
-        pTCStatement->uLastIRorGlobalTCResult = uLastIR;
-        return set_node_typecheck_notanexpr_success(pExpr->pTCNode);
-
-    } else {
-        if (uInParamsCount < 2)
-            return_error(pExpr, pTCStatement, pTCContext, CERR_TOO_FEW_PROC_PARAMETERS,
-                "tc_tmp_print_builtin() : too few parameters - requires 2");
-        else
-            return_error(pExpr, pTCStatement, pTCContext, CERR_TOO_MANY_PROC_PARAMETERS,
-                "tc_tmp_print_builtin() : too many parameters - requires 2");
-    }
-}
-*/
-
 TCBuiltinSign* t_allBuiltins[] = {
     &tc_foreign_builtin,        //EBUILTIN_FOREIGN,
     &tc_foreign_source_builtin, //EBUILTIN_FOREIGN_SOURCE,
@@ -767,7 +562,8 @@ local_func ETCResult typecheck_invocation_form(TmpTCNode* pExpr, TCStatement* pT
 
                 Assert_(is_value_tc_only(invocator.pIntrinsicValue));
                 const TypeInfo* pCastDestType = type_from_type_node(invocator.pIntrinsicValue);
-                check_type_availability_may_return_wait_or_error(pCastDestType, pExpr, pTCStatement, pTCContext, "typecheck_invocation_form() : Cannot cast to");
+                check_type_footprint_availability_may_return_wait_or_error(pCastDestType, pExpr, pTCStatement, pTCContext,
+                    "typecheck_invocation_form() : Cannot cast to");
                 u16 unused;
                 if (!is_allowed_as_runtime_type(pCastDestType, pTCContext, &unused)) {
                     eExpectation = EExpectedExpr::EXPECT_CONSTANT;
@@ -803,7 +599,8 @@ local_func ETCResult typecheck_invocation_form(TmpTCNode* pExpr, TCStatement* pT
 
                     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking special-cast builtin"), pTCContext->pWorker);
 
-                    check_type_availability_may_return_wait_or_error(pCastDestType, pExpr, pTCStatement, pTCContext, "typecheck_invocation_form() : Cannot invoke a special casting builtin to");
+                    check_type_footprint_availability_may_return_wait_or_error(pCastDestType, pExpr, pTCStatement, pTCContext,
+                        "typecheck_invocation_form() : Cannot invoke a special casting builtin to");
                     u16 uTypeErr = 0;
                     if (!is_allowed_as_runtime_type(pCastDestType, pTCContext, &uTypeErr)) {
                         eExpectation = EExpectedExpr::EXPECT_CONSTANT;

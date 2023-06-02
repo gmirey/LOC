@@ -160,13 +160,10 @@ local_func bool try_finalize_structlike_runtime_tc(TypeInfo_StructLike* ioToInit
                 if (!is_value_tc_const(pBinding)) {
                     const TypeInfo* pMemberType = pBinding->pType;
                     if (get_type_kind(pMemberType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                        Assert_(_is_compound_type_fully_typechecked((const TypeInfo_StructLike*)pMemberType));
                         if (pMemberType->_coreFlags & (COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME|COMPOUNDFLAG_BODY_IN_ERROR)) {
                             emit_compound_finalization_error(ioToInit, pTCContext, FERR_NOT_YET_IMPLEMENTED,
                                 "try_finalize_structlike_runtime_tc() : cannot finalize against member in error");
-                        }
-                        if (!is_compound_type_full_typechecked((const TypeInfo_StructLike*)pMemberType)) {
-                            int hello = 1;
-                            Assert(false, "youhou?");
                         }
                     }
 
@@ -366,10 +363,10 @@ local_func_inl u64 get_namespace_id(int iSourceFileIndex, u32 uRegistration, u64
     return uUID;
 }
 
-local_func_inl u64 get_namespace_id(ReferencedNamespace* pRefNamespace, u64 uHasPackageAccess = NAMESPACEFLAG_HAS_PACKAGE_ACCESS)
+local_func_inl u64 get_namespace_id(TCNamespace* pNamespace, u64 uHasPackageAccess = NAMESPACEFLAG_HAS_PACKAGE_ACCESS)
 {
-    int iSourceFileIndex = pRefNamespace->pOrigNamespace->pOriginalSourceFile->iRegistrationIndex;
-    u32 uRegistration = pRefNamespace->pOrigNamespace->uRegistrationIndex;
+    int iSourceFileIndex = pNamespace->pOriginalSourceFile->iRegistrationIndex;
+    u32 uRegistration = pNamespace->uRegistrationIndex;
     return get_namespace_id(iSourceFileIndex, uRegistration, uHasPackageAccess);
 }
 

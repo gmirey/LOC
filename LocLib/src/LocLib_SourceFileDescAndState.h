@@ -38,34 +38,6 @@ struct CompTimeNatural {
     u16 tLegs[0];
 };
 
-enum ETaskWaitingReason {
-    EWR_GLOBAL_IDENTIFIER_RESOLUTION,       // waiting for a global identifier to be found somewhere
-    EWR_PROC_BODY_TYPECHECK_SUCCESS,        // waiting for a proc body to successfully typecheck
-    EWR_COMPOUND_BODY_TYPECHECK_SUCCESS,    // waiting for a compound type body to successfully typecheck
-    EWR_OVERLOAD_GATHER_MORE,               // waiting for an overloaded-proclike identifier to gather more results
-    EWR_BINDING_TYPE_FINALIZATION,          // waiting for a global identifier binding typing to be finalized
-    EWR_BINDING_CONST_VALUE_FINALIZATION,   // waiting for a global identifier const binding to be evaluated
-};
-
-struct TCWaitingReason {
-
-    DECL_TRIVIAL_STRUCT_OPS(TCWaitingReason);
-    FORCE_INLINE bool operator==(const TCWaitingReason& other) const { return other._packed == _packed; }
-
-    u64 _packed;
-    FORCE_INLINE ETaskWaitingReason getWaitingReason() const { return ETaskWaitingReason(u8(_packed) & 0x0Fu); } // 4b
-    FORCE_INLINE int getSourceFileIndex() const { return int(_packed >> 4) & 0x0FFFFFFFu; } // 28b
-    FORCE_INLINE u32 getAwaitedId() const { return u32(_packed >> 32); } // 32b : identifier or procbody or ...
-};
-
-#define WAITING_REASON_NO_SPECIFIC_INDEX  (-5)
-
-local_func_inl TCWaitingReason make_waiting_reason(ETaskWaitingReason eReason, int iSourceFileIndex, u32 uAwaitedId) {
-    TCWaitingReason result;
-    result._packed = u64(eReason) | (u64(iSourceFileIndex) << 4) | (u64(uAwaitedId) << 32);
-    return result;
-}
-
 struct ForeignSourceDecl {
     StringView staticLibName;
     StringView dynamicLibName;
@@ -105,8 +77,14 @@ struct SourceFileDescAndState {
 
     IRRepo filewiseConstRepo;
     IRRepo filewiseGlobalVarRepo;
-    TmpMap<int, TmpMap<u32, ReferencedNamespace*>> mapReferencedNamespaces; // All namespaces fom *other sources*
-    TmpMap<u64, TmpSet<int>> mapSetLocalUnshadowingByNamespaceUID;    // These are the sets of all local identifiers which shall not shadow a name within a namespace, by namespace uid
+
+    // Currently not used
+    //TmpMap<int, TmpMap<u32, ReferencedNamespace*>> mapReferencedNamespaces; // All namespaces fom *other sources*
+
+    // Note: idea of disallowance of global shadowing from local values currently put aside...
+    // to reimplement: either uncomment this one, or the more direct set in tcnamespace
+    //TmpMap<u64, TmpSet<int>> mapSetLocalUnshadowingByNamespaceUID;    // These are the sets of all local identifiers which shall not shadow a name within a namespace, by namespace uid
+    
     StableGrowingVector<TCNamespace*> vecNamespaces;          // All namespaces *actually* defined in this file (not just referenced)
     TCNamespace* pRootNamespace;                              // always points to pos 0 of the above vec, but repeated here for fast access.
 
@@ -119,8 +97,8 @@ struct SourceFileDescAndState {
     TmpArray<u32> vecProcsIndicesDeclaredAsForeign;
 
     // TODO: locks once identifiers can be found in another context
-    TmpArray<TCContext*> vecTCTasksToLaunch;
-    TmpMap<TCWaitingReason, TmpArray<TCContext*>> mapWaitingTasksByReason; // TODO: multimap!!!
+    TmpArray<TCContext*> tvecTCTasksToLaunchByPrio[ETaskPriority::E_COUNT_TASKPRIO];
+    TmpMap<TCWaitingReason, TmpArray<TCContext*>> mapNonIdWaitingTasksByReason; // TODO: multimap!!!
 
     TmpMap<const TypeInfo*, TypeInfo_Pointer*> mapAllPointersByToType;
     TmpMap<const TypeInfo*, TmpMap<u32, TypeInfo_Array*> > mapAllArraysByToType;
@@ -132,33 +110,36 @@ struct SourceFileDescAndState {
         
         ioToInit->uRegistrationIndex = pOriginSourceFile->vecNamespaces.size();
         pOriginSourceFile->vecNamespaces.append(ioToInit);
-        ioToInit->asRef.pOrigNamespace = ioToInit;
         
         Arena localArena = pOriginSourceFile->localArena;
         FireAndForgetArenaAlloc sfsFFAlloc(localArena);
-        
-        ioToInit->asRef.laggedState.uDiscoveryProgress = ESOURCE_COMP_STATE_NOT_STARTED;
-        ioToInit->asRef.laggedState.uVersion = 0u;
-        //ioToInit->asRef.laggedState.mapKnownReferencedNamespaces.init(sfsFFAlloc);
-        ioToInit->asRef.laggedState.mapKnownPublicDeclarationsById.init(sfsFFAlloc);
-        ioToInit->asRef.laggedState.mapKnownAccessibleDeclarationsById.init(sfsFFAlloc);
-        ioToInit->asRef.laggedState.vecKnownUsedNamespaces.init(localArena);
-        ioToInit->asRef.laggedState.vecKnownUsedEnums.init(localArena);
-        ioToInit->asRef.laggedState.mapKnownOthersUsingThis.init(sfsFFAlloc);
 
-        //ioToInit->setLocalUnshadowing.init(sfsFFAlloc);
-        //ioToInit->mapReferencedNamespaces.init(sfsFFAlloc);
-        ioToInit->mapPublicDeclarationsById.init(sfsFFAlloc);
+        ioToInit->setLocalUnshadowing.init(sfsFFAlloc);
+
         ioToInit->mapAccessibleDeclarationsById.init(sfsFFAlloc);
         ioToInit->mapAllGlobalDeclarationsById.init(sfsFFAlloc);
-        ioToInit->vecAllUsedNamespaces.init(localArena);
-        ioToInit->vecAllUsedEnums.init(localArena);
+
         ioToInit->vecAccessibleUsedNamespaces.init(localArena);
+        ioToInit->vecAllUsedNamespaces.init(localArena);
+
         ioToInit->vecAccessibleUsedEnums.init(localArena);
-        ioToInit->setOfNewlyDeclaredGlobalIdentifiers.init(sfsFFAlloc);
-        ioToInit->mapOthersUsingThis.init(sfsFFAlloc);
-        ioToInit->uCountGlobalTasksInTasksToLaunch = 0u;
-        ioToInit->uCountGlobalTasksInWaitingTasks = 0u;
+        ioToInit->vecAllUsedEnums.init(localArena);
+
+        ioToInit->vecChildrenNamespaces.init(localArena);
+        ioToInit->vecAllNamespacesInSameFileUsingSelf.init(localArena);
+
+        ioToInit->mapAccessibleBindingsInclUsing.init(sfsFFAlloc);
+        ioToInit->mapAllBindingsInclUsing.init(sfsFFAlloc);
+
+        ioToInit->mapTasksWaitingForGlobalIds.init(sfsFFAlloc);
+
+        ioToInit->uCountGlobalAccessibleTasks = 0u;
+        ioToInit->uCountGlobalPrivateTasks = 0u;
+
+        ioToInit->vecLocalTasksWaitingForCompletion.init(localArena);
+        ioToInit->vecNonLocalTasksWaitingForCompletion.init(localArena);
+
+        ioToInit->iPrimaryIdentifier = -1;
     }
 
 	void init(int iIndex, int iLoadedFromFile, int iLoadedFromLine, Arena arenaForParseOnly, Arena sourceFileSpecificArena,
@@ -193,15 +174,15 @@ struct SourceFileDescAndState {
         vecAllCompoundDef.init(sourceFileSpecificArena);
         vecForeignSources.init(sourceFileSpecificArena);
         vecProcsIndicesDeclaredAsForeign.init(sourceFileSpecificArena);
-        //setOtherFilesWithTasksWaitingForMe.init(sfsFFAlloc);
-        //mapReferencedNamespaces.init(sfsFFAlloc);
-        mapSetLocalUnshadowingByNamespaceUID.init(sfsFFAlloc);
+        
         vecNamespaces.init(sourceFileSpecificArena);
         pRootNamespace = (TCNamespace*)alloc_from(sourceFileSpecificArena, sizeof(TCNamespace), alignof(TCNamespace));
         init_and_register_namespace(pRootNamespace, this, 0);
 
-        vecTCTasksToLaunch.init(sfsFFAlloc);
-        mapWaitingTasksByReason.init(sfsFFAlloc);
+        for (ETaskPriority ePrio = ETaskPriority::ETASKPRIO_HIGHEST; ePrio <= ETaskPriority::ETASKPRIO_LOWEST; ePrio = ETaskPriority(ePrio + 1u)) {
+            tvecTCTasksToLaunchByPrio[ePrio].init(sfsFFAlloc);
+        }
+        mapNonIdWaitingTasksByReason.init(sfsFFAlloc);
 
         mapAllPointersByToType.init(sfsFFAlloc);
         mapAllArraysByToType.init(sfsFFAlloc);
@@ -209,191 +190,6 @@ struct SourceFileDescAndState {
 	}
 
 };
-
-// Note: blocking call
-local_func_inl void acquire_type_def_lock(SourceFileDescAndState* pSourceFile, CompilationContext* pEvalContext) {
-    // TODO!!!
-}
-
-local_func_inl void release_type_def_lock(SourceFileDescAndState* pSourceFile, CompilationContext* pEvalContext) {
-    // TODO!!!
-}
-
-
-// Note: blocking call
-local_func_inl void acquire_write_laggued_state_lock(SourceFileDescAndState* pSourceFile, CompilationContext* pEvalContext) {
-    // TODO!!!
-}
-
-local_func_inl void release_write_laggued_state_lock(SourceFileDescAndState* pSourceFile, CompilationContext* pEvalContext) {
-    // TODO!!!
-}
-
-// Note: blocking call
-local_func_inl void acquire_read_laggued_state_lock(SourceFileDescAndState* pSourceFile, CompilationContext* pEvalContext) {
-    // TODO!!!
-}
-
-local_func_inl void release_read_laggued_state_lock(SourceFileDescAndState* pSourceFile, CompilationContext* pEvalContext) {
-    // TODO!!!
-}
-
-// Note: blocking call
-local_func_inl void acquire_source_file_specific_task_lock(SourceFileDescAndState* pSourceFile, WorkerDesc* pWorker) {
-    // TODO!!!
-}
-
-local_func_inl void release_source_file_specific_task_lock(SourceFileDescAndState* pSourceFile, WorkerDesc* pWorker) {
-    // TODO!!!
-}
-
-
-local_func void write_namespace_to_self_lagged_state_while_under_lock(TCNamespace* pNamespace, bool bWriteGlobals, bool bWriteRefs, Arena laggedArena)
-{
-    // Note: All the following "copying" of current state to lagged state containers use *re-init* (and append all) instead of a possibly less
-    //   wasteful *clear* (and append all), or even an update of just-the-new data. This way of doing things however is preserved, for the
-    //   time being, since it could allows us (even if we do not do that, in the current version) to shallow-copy those laggued states to
-    //   anywhere listening to them (only passing the implementation "pointers" of the resulting laggued state) with confidence that they became
-    //   essentially immutable data (and since we're using fire and forget alloc with arenas, this holds true as long as we do not reset
-    //   those arenas) => very cheap copy indeed for a potential 'listener', even if maybe vastly more wasteful to the laggued state now ?
-    //   (TODO: CLEANUP: profile this)
-    //
-    // Note : if we're prepared to be *that* wasteful... we could also simply devise an atomic-ptr to current lagged state, with fencing.
-    // This could peharps allow us to in fact be *less* wasteful : we could have an atomic counter of current accessors, and purely release
-    //   the whole arenas containing such states.
-    // => TODO!!!
-    pNamespace->asRef.laggedState.uDiscoveryProgress = pNamespace->eCompState;
-    pNamespace->asRef.laggedState.uVersion += 1u;
-    if (bWriteGlobals) {
-        Assert_(pNamespace->mapPublicDeclarationsById.size() >= pNamespace->asRef.laggedState.mapKnownPublicDeclarationsById.size());
-        if (pNamespace->mapPublicDeclarationsById.size() > pNamespace->asRef.laggedState.mapKnownPublicDeclarationsById.size()) {
-            pNamespace->asRef.laggedState.mapKnownPublicDeclarationsById.init(laggedArena,
-                pNamespace->mapPublicDeclarationsById);
-        }
-        Assert_(pNamespace->mapAccessibleDeclarationsById.size() >= pNamespace->asRef.laggedState.mapKnownAccessibleDeclarationsById.size());
-        if (pNamespace->mapAccessibleDeclarationsById.size() > pNamespace->asRef.laggedState.mapKnownAccessibleDeclarationsById.size()) {
-            pNamespace->asRef.laggedState.mapKnownAccessibleDeclarationsById.init(laggedArena,
-                pNamespace->mapAccessibleDeclarationsById);
-        }
-    } else {
-        Assert_(pNamespace->mapPublicDeclarationsById.size() == pNamespace->asRef.laggedState.mapKnownPublicDeclarationsById.size());
-        Assert_(pNamespace->mapAccessibleDeclarationsById.size() == pNamespace->asRef.laggedState.mapKnownAccessibleDeclarationsById.size());
-    }
-
-    if (bWriteRefs) {
-        Assert_(pNamespace->vecAccessibleUsedNamespaces.size() >= pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
-        if (pNamespace->vecAccessibleUsedNamespaces.size() > pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size()) {
-            pNamespace->asRef.laggedState.vecKnownUsedNamespaces.init(laggedArena);
-            pNamespace->asRef.laggedState.vecKnownUsedNamespaces.append_all(pNamespace->vecAccessibleUsedNamespaces);
-            /*
-            u32 uCount = pNamespace->vecUsedNamespaces.size();
-            pNamespace->asRef.laggedState.vecKnownUsedNamespaces.reserve(uCount);
-            for (u32 uIndex = 0u; uIndex < uCount; uIndex++) {
-                u64 uNamespaceUID = get_namespace_id(pNamespace->vecUsedNamespaces[uIndex]);
-                pNamespace->asRef.laggedState.vecKnownUsedNamespaces.append(uNamespaceUID);
-            }
-            */
-        }
-        Assert_(pNamespace->vecAccessibleUsedEnums.size() >= pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
-        if (pNamespace->vecAccessibleUsedEnums.size() > pNamespace->asRef.laggedState.vecKnownUsedEnums.size()) {
-            pNamespace->asRef.laggedState.vecKnownUsedEnums.init(laggedArena);
-            pNamespace->asRef.laggedState.vecKnownUsedEnums.append_all(pNamespace->vecAccessibleUsedEnums);
-        }
-        Assert_(pNamespace->mapOthersUsingThis.size() >= pNamespace->asRef.laggedState.mapKnownOthersUsingThis.size());
-        if (pNamespace->mapOthersUsingThis.size() > pNamespace->asRef.laggedState.mapKnownOthersUsingThis.size()) {
-            pNamespace->asRef.laggedState.mapKnownOthersUsingThis.init(laggedArena,
-                pNamespace->mapOthersUsingThis);
-        }
-    } else {
-        //Assert_(pNamespace->mapReferencedNamespaces.size() == pNamespace->asRef.laggedState.mapKnownReferencedNamespaces.size());
-        Assert_(pNamespace->vecAccessibleUsedNamespaces.size() == pNamespace->asRef.laggedState.vecKnownUsedNamespaces.size());
-        Assert_(pNamespace->vecAccessibleUsedEnums.size() == pNamespace->asRef.laggedState.vecKnownUsedEnums.size());
-        Assert_(pNamespace->mapOthersUsingThis.size() == pNamespace->asRef.laggedState.mapKnownOthersUsingThis.size());
-    }
-}
-
-#if 0
-
-local_func TmpMap<u32, ReferencedNamespace*>& get_or_insert_map_of_referenced_namespaces(SourceFileDescAndState* pReferencingSourceFile, int iReferencedSourceFile)
-{
-    auto itFound = pReferencingSourceFile->mapReferencedNamespaces.find(iReferencedSourceFile);
-    if (itFound == pReferencingSourceFile->mapReferencedNamespaces.end()) {
-        TmpMap<u32, ReferencedNamespace*> newMapForThisFile;
-        newMapForThisFile.init(pReferencingSourceFile->localArena);
-        itFound = pReferencingSourceFile->mapReferencedNamespaces.insert_not_present(
-            get_map_hash(iReferencedSourceFile), iReferencedSourceFile, newMapForThisFile);
-    }
-    return itFound.value();
-}
-
-local_func ReferencedNamespace* get_or_insert_referenced_namespace(SourceFileDescAndState* pReferencingSourceFile,
-    int iReferencedSourceFile, u32 uNamespaceIndex, CompilationContext* pContext, bool bHasLockLaggedStateForReferencedFile)
-{
-    if (pReferencingSourceFile->iRegistrationIndex == iReferencedSourceFile) {
-        return (ReferencedNamespace*)pReferencingSourceFile->vecNamespaces[uNamespaceIndex];
-    } else {
-        TmpMap<u32, ReferencedNamespace*>& mapNamespaces = get_or_insert_map_of_referenced_namespaces(pReferencingSourceFile, iReferencedSourceFile);
-        auto itFound = mapNamespaces.find(uNamespaceIndex);
-        if (itFound == mapNamespaces.end()) {
-            ReferencedNamespace* pNewRef = (ReferencedNamespace*)alloc_from(pReferencingSourceFile->localArena,
-                sizeof(ReferencedNamespace), alignof(ReferencedNamespace));
-            SourceFileDescAndState* pReferencedFile = pContext->pProgCompilationState->vecSourceFiles[u32(iReferencedSourceFile)];
-            pNewRef->pOrigNamespace = pReferencedFile->vecNamespaces[uNamespaceIndex];
-
-            if (!bHasLockLaggedStateForReferencedFile)
-                acquire_read_laggued_state_lock(pReferencedFile, pContext);
-            
-            // Note this "copy" is not deep at all, but we're ensured that the containers from the lagged states will *not* change same allocs.
-            pNewRef->laggedState = pNewRef->pOrigNamespace->asRef.laggedState;
-            
-            if (!bHasLockLaggedStateForReferencedFile)
-                release_read_laggued_state_lock(pReferencedFile, pContext);
-        }
-        return itFound.value();
-    }
-}
-
-#endif
-
-#if 0
-local_func void copy_namespace_lagged_state_to_ref_while_src_under_lock(SourceFileDescAndState* pSourceFile,
-    ReferencedNamespace* pRefNamespace, Arena laggedArena, TmpArray<TmpMap<u64, ReferencedNamespace*>*>* outVecMapRefsToReevaluate)
-{
-    LaggedNamespaceState& laggedSrc = pRefNamespace->pOrigNamespace->asRef.laggedState;
-    LaggedNamespaceState& laggedDst = pRefNamespace->laggedState;
-    if (laggedDst.uDiscoveryProgress != laggedSrc.uDiscoveryProgress || laggedDst.uVersion != laggedSrc.uVersion) {
-        Assert_(laggedDst.uDiscoveryProgress >= laggedSrc.uDiscoveryProgress);
-        Assert_(laggedDst.uVersion > laggedSrc.uVersion);
-        Assert_(laggedSrc.mapKnownPublicDeclarationsById.size() >= laggedDst.mapKnownPublicDeclarationsById.size());
-        if (laggedSrc.mapKnownPublicDeclarationsById.size() > laggedDst.mapKnownPublicDeclarationsById.size()) {
-            laggedDst.mapKnownPublicDeclarationsById.init(laggedArena,
-                laggedSrc.mapKnownPublicDeclarationsById);
-        }
-        Assert_(laggedSrc.mapKnownAccessibleDeclarationsById.size() >= laggedDst.mapKnownAccessibleDeclarationsById.size());
-        if (laggedSrc.mapKnownAccessibleDeclarationsById.size() > laggedDst.mapKnownAccessibleDeclarationsById.size()) {
-            laggedDst.mapKnownAccessibleDeclarationsById.init(laggedArena,
-                laggedSrc.mapKnownAccessibleDeclarationsById);
-        }
-        Assert_(laggedSrc.mapKnownReferencedNamespaces.size() >= laggedDst.mapKnownReferencedNamespaces.size());
-        if (laggedSrc.mapKnownReferencedNamespaces.size() > laggedDst.mapKnownReferencedNamespaces.size()) {
-            laggedDst.mapKnownAccessibleDeclarationsById.init(laggedArena,
-                laggedSrc.mapKnownAccessibleDeclarationsById);
-            outVecMapRefsToReevaluate->append(&(laggedDst.mapKnownAccessibleDeclarationsById));
-        }
-        Assert_(laggedSrc.vecKnownUsedNamespaces.size() >= laggedDst.vecKnownUsedNamespaces.size());
-        if (laggedSrc.vecKnownUsedNamespaces.size() > laggedDst.vecKnownUsedNamespaces.size()) {
-            laggedDst.vecKnownUsedNamespaces.init(laggedArena,
-                laggedSrc.vecKnownUsedNamespaces);
-        }
-        Assert_(laggedSrc.vecKnownUsedEnums.size() >= laggedDst.vecKnownUsedEnums.size());
-        if (laggedSrc.vecKnownUsedEnums.size() > laggedDst.vecKnownUsedEnums.size()) {
-            laggedDst.vecKnownUsedEnums.init(laggedArena,
-                laggedSrc.vecKnownUsedEnums);
-        }
-    }
-}
-#endif
-
 
 exported_func_impl const char* get_filename_from_filedesc(SourceFileDescAndState* pSourceFileDesc)
 {

@@ -72,11 +72,11 @@ struct WholeProgramCompilationState {
     TmpStringMap<u32> mapAllIdentifierIdsByName;
 
     TmpMap<int, ParseFileTaskDescription> mapOfParseSourceFileTasksToLaunch;
-    TmpSet<int> setOfFilesWithTCTasksToLaunch;
-    TmpSet<int> setOfFilesWithTCWaitingTasks;
+    TmpSet<int> tsetOfFilesWithTCTasksByPrio[ETaskPriority::E_COUNT_TASKPRIO];
+    TmpSet<int> setOfFilesWithOptimTasksToLaunch;
     TmpSet<int> setOfFilesWithActiveTasksBeingRun;
 
-    volatile u64 uCountOfActivelyWorking; //  Atomic !
+    TmpSet<TCContext*> setOfTCWaitingTasks;
 
     ChunkProvider globalProvider; // TODO: possibly separate global provider for parser-only,
                                   //   from a global-provider behind locks.
@@ -108,6 +108,7 @@ struct WholeProgramCompilationState {
     LocLib_CompilationResults* pCompilationResults;
     
     u32 uUniqueIdIncreasing; // no need for 64b since an 'id' is a 32b index here anyway...
+    u32 uTCWorkerCount;
 
     void init_reserved_words_and_implicit_members_ids()
     {
@@ -378,6 +379,7 @@ local_func bool init_program_compilation_state(WholeProgramCompilationState* pPr
     pProgramCompState->pOsFuncs = pOsFuncs;
     pProgramCompState->pCompilationParams = pCompilationParams;
     pProgramCompState->pCompilationResults = oCompilationResults;
+    pProgramCompState->uTCWorkerCount = 1u; // TODO !! 
 
     init_chunk_provider(&pProgramCompState->globalProvider);
     init_chunk_provider(&pProgramCompState->parseOnlyProvider);
@@ -386,15 +388,19 @@ local_func bool init_program_compilation_state(WholeProgramCompilationState* pPr
     init_arena(&pProgramCompState->globalArena, pProgramCompState->globalProvider);
     init_arena(&pProgramCompState->parseOnlyArena, pProgramCompState->parseOnlyProvider);
 
-    pProgramCompState->mapOfParseSourceFileTasksToLaunch.init(pProgramCompState->globalArena);
-    pProgramCompState->setOfFilesWithTCTasksToLaunch.init(pProgramCompState->globalArena);
-    pProgramCompState->setOfFilesWithTCWaitingTasks.init(pProgramCompState->globalArena);
-    pProgramCompState->setOfFilesWithActiveTasksBeingRun.init(pProgramCompState->globalArena);
-    pProgramCompState->uCountOfActivelyWorking = 0;
+    FireAndForgetArenaAlloc globalFFAlloc(pProgramCompState->globalArena);
+    pProgramCompState->mapOfParseSourceFileTasksToLaunch.init(globalFFAlloc);
+    for (ETaskPriority ePrio = ETaskPriority::ETASKPRIO_HIGHEST; ePrio <= ETaskPriority::ETASKPRIO_LOWEST; ePrio = ETaskPriority(ePrio + 1u)) {
+        pProgramCompState->tsetOfFilesWithTCTasksByPrio[ePrio].init(globalFFAlloc);
+    }
+    pProgramCompState->setOfFilesWithOptimTasksToLaunch.init(globalFFAlloc);
+    pProgramCompState->setOfFilesWithActiveTasksBeingRun.init(globalFFAlloc);
+
+    pProgramCompState->setOfTCWaitingTasks.init(globalFFAlloc);
 
     pProgramCompState->vecSourceFiles.init(pProgramCompState->globalArena);
     pProgramCompState->vecBackendErrors.init(pProgramCompState->globalArena);
-    pProgramCompState->mapRuntimeTypeIdToTCTypeInfo.init(pProgramCompState->globalArena);
+    pProgramCompState->mapRuntimeTypeIdToTCTypeInfo.init(globalFFAlloc);
     
     //pProgramCompState->vecProcLikeSignTypes.init(pProgramCompState->globalArena);
     //pProgramCompState->vecProcLikeAddressTypes.init(pProgramCompState->globalArena);
@@ -402,7 +408,7 @@ local_func bool init_program_compilation_state(WholeProgramCompilationState* pPr
     //pProgramCompState->vecAliasedTypes.init(pProgramCompState->globalArena);
 
     pProgramCompState->vecAllIdentifierNamesById.init(pProgramCompState->parseOnlyArena);
-    pProgramCompState->mapAllIdentifierIdsByName.init(pProgramCompState->parseOnlyArena);
+    pProgramCompState->mapAllIdentifierIdsByName.init(FireAndForgetArenaAlloc(pProgramCompState->parseOnlyArena));
 
     init_keywords();
 
@@ -630,8 +636,8 @@ local_func ESourceCompState is_source_file_compiled_otherwise_spawn_task(int iSo
     // TODO: put behind lock for multithread
     Assert_(iSourceFileIndex >= 0 && iSourceFileIndex < (int)pProgCompilationState->vecSourceFiles.size());
     SourceFileDescAndState* pSourceFileDesc = pProgCompilationState->vecSourceFiles[iSourceFileIndex];
-    ESourceCompState uCurrentCompState = pSourceFileDesc->pRootNamespace->eCompState;
-    if (uCurrentCompState == ESourceCompState::ESOURCE_COMP_STATE_NOT_STARTED) {
+    ESourceCompState eCurrentCompState = ESourceCompState(pSourceFileDesc->pRootNamespace->uTCProgress);
+    if (eCurrentCompState == ESourceCompState::ESOURCE_COMP_STATE_NOT_STARTED) {
         if (pProgCompilationState->mapOfParseSourceFileTasksToLaunch.find(iSourceFileIndex) ==
             pProgCompilationState->mapOfParseSourceFileTasksToLaunch.end())
         {
@@ -648,7 +654,7 @@ local_func ESourceCompState is_source_file_compiled_otherwise_spawn_task(int iSo
             pProgCompilationState->mapOfParseSourceFileTasksToLaunch.insert(iSourceFileIndex, parseTask);
         }
     }
-    return uCurrentCompState;
+    return eCurrentCompState;
 }
 
 local_func_inl void init_reserved_type_and_value(u8 uReservedIndex, const TypeInfo* pType, u32 uValuePayload, WholeProgramCompilationState* pProgramState, WorkerDesc* pWorker)
@@ -695,15 +701,62 @@ local_func_inl void init_reserved_type_and_value(u8 uReservedIndex, const TypeIn
     g_tReservedWordValues[uReservedIndex].info.metaValue.knownValue.pType = pTypeValue;
 }
 
-
 local_func_inl void acquire_global_using_graph_lock(WholeProgramCompilationState* pCompState, WorkerDesc* pWorkerDesc)
 {
     // TODO !!
+    Assert(pCompState->uTCWorkerCount == 1u, "acquire_global_using_graph_lock : not yet implemented for MT");
 }
 
 local_func_inl void release_global_using_graph_lock(WholeProgramCompilationState* pCompState, WorkerDesc* pWorkerDesc)
 {
     // TODO !!
+    Assert(pCompState->uTCWorkerCount == 1u, "release_global_using_graph_lock : not yet implemented for MT");
+}
+
+local_func_inl void acquire_global_task_launching_lock(WholeProgramCompilationState* pCompState, WorkerDesc* pWorkerDesc)
+{
+    // TODO !!
+    Assert(pCompState->uTCWorkerCount == 1u, "acquire_global_task_lock : not yet implemented for MT");
+}
+
+local_func_inl void release_global_task_launching_lock(WholeProgramCompilationState* pCompState, WorkerDesc* pWorkerDesc)
+{
+    // TODO !!
+    Assert(pCompState->uTCWorkerCount == 1u, "release_global_task_graph_lock : not yet implemented for MT");
+}
+
+local_func_inl void acquire_global_waiting_task_lock(WholeProgramCompilationState* pCompState, WorkerDesc* pWorkerDesc)
+{
+    // TODO !!
+    Assert(pCompState->uTCWorkerCount == 1u, "acquire_global_waiting_task_lock : not yet implemented for MT");
+}
+
+local_func_inl void release_global_waiting_task_lock(WholeProgramCompilationState* pCompState, WorkerDesc* pWorkerDesc)
+{
+    // TODO !!
+    Assert(pCompState->uTCWorkerCount == 1u, "release_global_waiting_task_lock : not yet implemented for MT");
+}
+
+// Note: blocking call
+local_func_inl void acquire_source_file_specific_task_lock(SourceFileDescAndState* pSourceFile, WorkerDesc* pWorker) {
+    // TODO !!
+    Assert(pSourceFile->programState->uTCWorkerCount == 1u, "acquire_source_file_specific_task_lock : not yet implemented for MT");
+}
+
+local_func_inl void release_source_file_specific_task_lock(SourceFileDescAndState* pSourceFile, WorkerDesc* pWorker) {
+    // TODO!!!
+    Assert(pSourceFile->programState->uTCWorkerCount == 1u, "release_source_file_specific_task_lock : not yet implemented for MT");
+}
+
+// Note: blocking call
+local_func_inl void acquire_source_file_specific_event_lock(SourceFileDescAndState* pSourceFile, WorkerDesc* pWorker) {
+    // TODO!!!
+    Assert(pSourceFile->programState->uTCWorkerCount == 1u, "acquire_source_file_specific_event_lock : not yet implemented for MT");
+}
+
+local_func_inl void release_source_file_specific_event_lock(SourceFileDescAndState* pSourceFile, WorkerDesc* pWorker) {
+    // TODO!!!
+    Assert(pSourceFile->programState->uTCWorkerCount == 1u, "release_source_file_specific_event_lock : not yet implemented for MT");
 }
 
 #endif //LOCLIB_PROGRAM_STATE_H_

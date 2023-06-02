@@ -83,15 +83,8 @@ local_func ETCResult typecheck_arraylike_decl(TmpTCNode* pExpr, TmpTCNode* pInsi
             return_error(pExpr, pTCStatement, pTCContext, CERR_TYPE_TOO_LARGE,
                 "typecheck_arraylike_decl() : max byte count AND elem count for static array type is below 1M");
         }
-        if (get_type_kind(pBaseType) == ETYPEKIND_STRUCTLIKE) {
-            const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pBaseType;
-            if (!is_structlike_type_footprint_available(pAsStructLike)) {
-                return add_waiting_task_for_compound_body(pAsStructLike, pExpr->uNodeIndexInStatement, pTCContext);
-            } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME) {
-                return_error(pExpr, pTCStatement, pTCContext, CERR_COMPOUND_TYPE_IN_ERROR,
-                    "typecheck_arraylike_decl() : Cannot make a static-array on a struct-like base-type which happens to be in error");
-            }
-        }
+        check_type_footprint_availability_may_return_wait_or_error(pBaseType, pExpr, pTCStatement, pTCContext,
+            "typecheck_arraylike_decl() : Cannot make a static-array on");
         return tc_make_array_type_as(pExpr, pBaseType, uElemCount, pTCStatement, pTCContext);
     }
 }

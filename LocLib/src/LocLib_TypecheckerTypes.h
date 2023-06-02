@@ -34,7 +34,7 @@ NodeValue* g_tReservedWordValues;
 //#define MAX_IR_INSTRUCTIONS_COUNT   0x007FFFFFu   // 8M-1 ; leaving 'immediate' range untouched
 
 enum ETypecheckContextKind : u8 {
-    ECTXKIND_GLOBAL_PUBLIC,            // currently typechecking a root level at public scope ;
+    //ECTXKIND_GLOBAL_PUBLIC,            // currently typechecking a root level at public scope ;
     ECTXKIND_GLOBAL_PACKAGE,           // currently typechecking a root level at package scope (default) ;
     ECTXKIND_GLOBAL_PRIVATE,           // currently typechecking a root level at private scope ;
     ECTXKIND_COMPOUND,                 // currently typechecking contents of a compound type declaration such as struct, union, enum...
@@ -44,7 +44,7 @@ enum ETypecheckContextKind : u8 {
 };
 
 enum EScopeKind : u8 {
-    SCOPEKIND_GLOBAL_PUBLIC,            // registration at global level, with public scope
+    //SCOPEKIND_GLOBAL_PUBLIC,            // registration at global level, with public scope
     SCOPEKIND_GLOBAL_PACKAGE,           // registration at global level, with package scope
     SCOPEKIND_GLOBAL_PRIVATE,           // registration at global level, with private scope
     SCOPEKIND_COMPOUND,                 // registration as member of a compound type such as struct, union, enum...
@@ -130,7 +130,6 @@ struct TCDeclSourceBlock : public TCBaseSourceBlock {
 #define BLOCK_SCOPED_ENTITY_BASE_INDEX_MASK         0x0FFF'FFFFu // for extracting base index from 'uFlagsAndScopeBaseIndex'
 
 // predecls
-struct ReferencedNamespace;
 struct TypeInfo_Enum;
 
 // a specialization of an 'AST' block, for when it is known to be typechecked in the context of typechecking a proc-like body
@@ -228,7 +227,7 @@ local_func_inl ScopedEntityHandle make_scoped_entity(ValueBinding* pBinding) {
     static_assert(ESCOPEDENTITY_BINDING == 0, "ESCOPEDENTITY_BINDING should be 0");
     ScopedEntityHandle result; result.pAsBinding = pBinding; return result;
 }
-local_func_inl ScopedEntityHandle make_scoped_entity(ReferencedNamespace* pNamespace) {
+local_func_inl ScopedEntityHandle make_scoped_entity(TCNamespace* pNamespace) {
     ScopedEntityHandle result; result._payload = reinterpret_cast<u64>(pNamespace)|ESCOPEDENTITY_USE_NAMESPACE;
     return result;
 }
@@ -250,9 +249,9 @@ local_func_inl ValueBinding* get_scoped_entity_as_declared_binding(ScopedEntityH
     Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_BINDING);
     return (ValueBinding*)get_untagged_scoped_entity(entityHandle);
 }
-local_func_inl ReferencedNamespace* get_scoped_entity_as_used_namespace(ScopedEntityHandle entityHandle) {
+local_func_inl TCNamespace* get_scoped_entity_as_used_namespace(ScopedEntityHandle entityHandle) {
     Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_USE_NAMESPACE);
-    return (ReferencedNamespace*)get_untagged_scoped_entity(entityHandle);
+    return (TCNamespace*)get_untagged_scoped_entity(entityHandle);
 }
 local_func_inl const TypeInfo_Enum* get_scoped_entity_as_used_enum(ScopedEntityHandle entityHandle) {
     Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_USE_ENUM);
@@ -262,6 +261,15 @@ local_func_inl RegisteredDeferInDeclOrder* get_scoped_entity_as_declared_defer(S
     Assert_(get_scoped_entity_kind(entityHandle) == ESCOPEDENTITY_DEFER);
     return (RegisteredDeferInDeclOrder*)get_untagged_scoped_entity(entityHandle);
 }
+
+enum EProcTypecheckingStatus : u32 {
+    EPROCSTATUS_NOT_NET_STARTED,
+    EPROCSTATUS_BEING_TCED,
+    EPROCSTATUS_SUCCESS,
+    EPROCSTATUS_SUCCESS_FOREIGN,
+    EPROCSTATUS_IN_ERROR_TC,
+    EPROCSTATUS_IN_ERROR_GRAPH,
+};
 
 struct GraphResult;
 // the structure representing a whole proc-like body (as a 'result' : for the typechecked nodes, see 'TCProcBodySource')
@@ -279,6 +287,9 @@ struct TCProcBodyResult {
     u64 uIsForeignSource;
     FFString foreignSymbolName;
     GraphResult* pGraphResult;
+
+    TmpArray<TCContext*> vecLocalTasksWaitingForCompletion;     // All tasks in same file waiting for this proc's completion
+    TmpArray<TCContext*> vecNonLocalTasksWaitingForCompletion;  // All tasks in other files waiting for this proc's completion
 };
 
 struct TCProcBodyRegistration {
@@ -292,6 +303,8 @@ struct TCProcBodyRegistration {
 #define CTXFLAG_IS_ENUM_BODY                0x0000'0008u  // typically false in all but enum bodies
 #define CTXFLAG_ALLOW_RUNTIME               0x0000'0010u  // typically false on root context, true on sequential
 
+#define CTXFLAG_CURRENT_TC_STRUCTCONST      0x0000'0020u  // when current statement is a const decl, within structlike
+
 struct LocalNodeInfoForResumedTask {
     TmpArray<u32> jumpsToTrue;
     TmpArray<u32> jumpsToFalse;
@@ -304,6 +317,52 @@ struct LocalNodeInfoForResumedTask {
     u32 _pad1;
 };
 
+enum ETaskPriority : u8 {
+    ETASKPRIO_HIGH,
+    ETASKPRIO_MED,
+    ETASKPRIO_LOW,
+
+    ETASKPRIO_HIGHEST = ETASKPRIO_HIGH,
+    ETASKPRIO_LOWEST = ETASKPRIO_LOW,
+    E_COUNT_TASKPRIO
+};
+
+enum ETaskWaitingReason {
+    EWR_GLOBAL_IDENTIFIER_RESOLUTION,       // waiting for a global identifier to be found somewhere
+    EWR_COMPOUND_BODY_TYPECHECK_SUCCESS,    // waiting for a compound type body to successfully typecheck
+    EWR_NAMESPACE_GATHER_ALL_ACCESSIBLE,    // waiting for a namespace to be done gathering all its (non-private) globals
+    EWR_NAMESPACE_GATHER_ALL_IN_FILE,       // waiting for a namespace to be done gathering all its globals, in same file
+    
+    // Planned for later (?)
+    EWR_PROC_BODY_TYPECHECK_SUCCESS,        // waiting for a proc body to successfully typecheck
+    EWR_OVERLOAD_GATHER_MORE,               // waiting for an overloaded-proclike identifier to gather more results
+
+    EWR_NONE,
+
+    // TODO: CLEANUP: Not currently used
+    //EWR_BINDING_TYPE_FINALIZATION,          // waiting for a global identifier binding typing to be finalized
+    //EWR_BINDING_CONST_VALUE_FINALIZATION,   // waiting for a global identifier const binding to be evaluated
+};
+
+struct TCWaitingReason {
+
+    DECL_TRIVIAL_STRUCT_OPS(TCWaitingReason);
+    FORCE_INLINE bool operator==(const TCWaitingReason& other) const { return other._packed == _packed; }
+
+    u64 _packed;
+    FORCE_INLINE ETaskWaitingReason getWaitingReason() const { return ETaskWaitingReason(u8(_packed) & 0x0Fu); } // 4b
+    FORCE_INLINE int getSourceFileIndex() const { return int(_packed >> 4) & 0x0FFFFFFFu; } // 28b
+    FORCE_INLINE u32 getAwaitedId() const { return u32(_packed >> 32); } // 32b : identifier or procbody or ...
+};
+
+#define WAITING_REASON_NO_SPECIFIC_INDEX  (-5)
+
+local_func_inl TCWaitingReason make_waiting_reason(ETaskWaitingReason eReason, int iSourceFileIndex, u32 uAwaitedId) {
+    TCWaitingReason result;
+    result._packed = u64(eReason) | (u64(iSourceFileIndex) << 4) | (u64(uAwaitedId) << 32);
+    return result;
+}
+
 struct TCContext : public IRAwareContext {
     ETypecheckContextKind eKind;    // context kind, driving the additional data of current context instance.
     ETypecheckBlockKind eBlockKind; // block kind, to safely cast pCurrentBlock (and all of its parents, ensured in same context)
@@ -312,6 +371,14 @@ struct TCContext : public IRAwareContext {
     u32 uFlags;                     // for fast-check of common properties of current context
     TCBaseSourceBlock* pCurrentBlock;   // current block to typecheck, may be a TCDeclSourceBlock or TCSeqSourceBlock depending on block kind
     TCNamespace* pNamespace;        // the active namespace, where globals are defined.
+
+    TmpSet<int> setOfNewlyDeclaredIdentifiers;  // the set of all newly declared identifiers on this TC *pass* (worker-tmp allocated)
+    u32 uSizeOfVecUsingAccessibleEnumBefore;       // size of vec using accessible enum at start of this TC *pass* (global TC tasks only)
+    u32 uSizeOfVecUsingAccessibleNamespaceBefore;  // size of vec using accessible namespace at start of this TC *pass* (global TC tasks only)
+    u32 uSizeOfVecUsingAllEnumBefore;              // size of vec using accessible enum at start of this TC *pass* (global TC tasks only)
+    u32 uSizeOfVecUsingAllNamespaceBefore;         // size of vec using accessible namespace at start of this TC *pass* (global TC tasks only)
+    u32 uSizeOfVecChildrenNamespacesBefore;        // size of vec children namespaces at start of this TC *pass* (global TC tasks only)
+    u32 uSizeOfVecIncludedStructLikeBefore;        // size of vec included structlike at start of this TC *pass* (structlike body TC tasks only)
 
     //
     // the following if has_ctx_decl_blocks
@@ -336,10 +403,10 @@ struct TCContext : public IRAwareContext {
     TmpArray<u32>* pVecOfGotoPlaceholdersToReturnPoint;
     // TODO: something to reference table of multi-expr for when expanding ?
 
-    u32 uGlobalStatementOnHold;
     u8 bResumingCurrentStatement;
-    u8 _pad0;
+    ETaskPriority eTaskPrio;
     u16 _pad1;
+    u32 uGlobalStatementOnHold;
     TmpMap<u32, LocalNodeInfoForResumedTask*> mapLocalNodeInfoIfResumingCurrentStatement;
 
     //
@@ -349,12 +416,24 @@ struct TCContext : public IRAwareContext {
     TCCompoundRegistration* pCompoundToTC;
 
     u32 uNodeIndexWithWait;
+    u32 _pad2;
+
     // TODO ? 
     //TCProcExpansionContext* pResumingToExpansion; // to use in the somewhat-edgey-case of resuming an inline or macro expansion task
+
+    TCWaitingReason waitingReason;
 };
 
 local_func_inl bool is_ctx_global(const TCContext* pCtx) { return pCtx->eKind <= ECTXKIND_GLOBAL_PRIVATE; }
 local_func_inl bool is_ctx_compound(const TCContext* pCtx) { return pCtx->eKind == ECTXKIND_COMPOUND; }
+local_func_inl bool is_ctx_structlike_compound(const TCContext* pCtx) {
+    if (is_ctx_compound(pCtx)) {
+        Assert_(pCtx->pCompoundToTC);
+        Assert_(pCtx->pCompoundToTC->pCompoundType);
+        return (get_type_kind(pCtx->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE);
+    }
+    return false; 
+}
 local_func_inl bool is_ctx_with_proc_source(const TCContext* pCtx) { return pCtx->eKind >= ECTXKIND_PROCBODY; }
 local_func_inl bool is_ctx_proc_expansion(const TCContext* pCtx) { return pCtx->eKind >= ECTXKIND_INLINEEXP; }
 local_func_inl bool is_ctx_regular_proc_body(const TCContext* pCtx) { return pCtx->eKind == ECTXKIND_PROCBODY; }
@@ -450,17 +529,21 @@ local_func_inl SourceFileDescAndState* get_tc_global_declaration_file(TCContext*
 }
 */
 
+/*
 local_func_inl bool does_tc_ctx_allow_shadowing_globals(TCContext* pCtx, EDeclAttributes attr) {
     Assert(attr == EDeclAttributes::EDECLATTR_REGULAR_CONST || attr == EDeclAttributes::EDECLATTR_REGULAR_VAR,
         "decl attribute kind not yet implemented"); // TODO
     return false;
 }
+*/
 
+/*
 local_func_inl bool does_tc_ctx_allow_shadowing_locals(TCContext* pCtx, EDeclAttributes attr) {
     Assert(attr == EDeclAttributes::EDECLATTR_REGULAR_CONST || attr == EDeclAttributes::EDECLATTR_REGULAR_VAR,
         "decl attribute kind not yet implemented"); // TODO
     return false;
 }
+*/
 
 local_func_inl bool should_tc_ctx_halt_on_non_success(TCContext* pCtx) {
     return pCtx->uFlags & CTXFLAG_HALT_ON_NON_SUCCESS;

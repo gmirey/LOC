@@ -661,8 +661,10 @@ local_func TypeInfo_StructLike* make_core_structlike(WholeProgramCompilationStat
     pResult->pRegistration = (TCCompoundRegistration*)alloc_from(pCompState->globalArena, sizeof(TCCompoundRegistration), alignof(TCCompoundRegistration));
     pResult->pRegistration->iPrimaryIdentifier = iIdentifier;
     pResult->pRegistration->pCompoundType = pResult;
-    pResult->pRegistration->setWaitingConstOnly.init(pCompState->globalArena);
-    pResult->pRegistration->setWaitingPossiblyRuntime.init(pCompState->globalArena);
+    pResult->pRegistration->uCountEnsuredConstTasks = 0u;
+    pResult->pRegistration->uCountPossiblyRuntimeTasks = 0u;
+    pResult->pRegistration->vecLocalTasksWaitingForCompletion = {};
+    pResult->pRegistration->vecNonLocalTasksWaitingForCompletion = {};
     pResult->pRegistration->pRootTcBlock = 0; // invalid 'registration' cross-indexing for core structlike
     pResult->pRegistration->pStatementWithSignature = 0; // invalid 'registration' cross-indexing for core structlike
     pResult->pRegistration->uTCProgress = ECompoundTCProgress::ECOMPOUND_DONE_ALL; // starting progress already 'done' for core structlike

@@ -249,11 +249,20 @@ struct TCCompoundRegistration {
     TCBaseSourceBlock* pRootTcBlock;
     int iPrimaryIdentifier;
     u32 volatile uTCProgress;
-    TmpSet<TCContext*> setWaitingConstOnly;
-    TmpSet<TCContext*> setWaitingPossiblyRuntime;
+
+    SourceFileDescAndState* pSourceFile;
+
+    TmpArray<TCContext*> vecLocalTasksWaitingForCompletion;     // All tasks in same file waiting for this compound's completion (currently indifferently full or runtime only)
+    TmpArray<TCContext*> vecNonLocalTasksWaitingForCompletion;  // All tasks in other files waiting for this compound's completion (currently indifferently full or runtime only)
+    
+    // Tasks remaining to be done before we can flag ourselves (and notify) as being done with either private or non-private declaration gathering
+    // Note: Those are indifferently waiting, or ready to lauch, or being TC'd. Will be decremented on task completion.
+    // => Can only be incremented when registering another wait => from a TC on same file => No lock needed !
+    u32 uCountEnsuredConstTasks;
+    u32 uCountPossiblyRuntimeTasks;
 };
 
-
+// 'Compound' is our bucket name for both enums and structlikes, here
 struct TypeInfo_CompoundBase : public TypeInfo_UserBase {
     TCCompoundRegistration* pRegistration;
     u16 uRegistrationIndex;  // 64k max compound types per source file
@@ -314,13 +323,19 @@ local_func_inl const TypeInfo* unalias(const TypeInfo* pType) {
     return unalias_ext(pType, &unused);
 }
 
-enum ECompoundTCProgress : u8 {
-    ECOMPOUND_NOT_YET_STARTED = 0,
-    ECOMPOUND_IN_PROGRESS,
-    ECOMPOUND_DONE_RUNTIME,
-    ECOMPOUND_DONE_ALL,
+// 'Compound' is our bucket name for both enums and structlikes, here
+enum ECompoundTCProgress : u32 {
+    ECOMPOUND_NOT_YET_STARTED = 0,      // state of a compound whose tpecheck wasn't yet startet
+    ECOMPOUND_IN_PROGRESS,              // state of a compound being in progress
+    ECOMPOUND_DONE_RUNTIME,             // state of a compound where (mostly relevant for structlike) all runtime members have been found and sorted. Not really used atm, though.
+    ECOMPOUND_DONE_ALL,                 // state of a compound where all members have been found.
+
+//    ECOMPOUNDFLAG_BEING_LOCKED = 0x40u  // temporary flag (at interplay with atomic handling of changes) while we're adding tasks waiting on its completion
 };
 
+#define STRUCTLIKE_MOCK_BINDING_INCLUSION   (-1)
+
+// 'StructLike' is our bucket name for structs, packed structs, unions, and struct *views*
 // 2x64b + TypeInfo
 struct TypeInfo_StructLike : public TypeInfo_CompoundBase {
     TmpMap<int, u32> mapAllMembers;
@@ -329,14 +344,14 @@ struct TypeInfo_StructLike : public TypeInfo_CompoundBase {
                                             // being of the included *type* (should be a structlike) and same uOffsetFromStart trick
 };
 
-local_func_inl bool is_structlike_type_footprint_available(const TypeInfo_StructLike* pStructType)
+local_func_inl bool _is_structlike_type_footprint_available(const TypeInfo_StructLike* pStructType)
 {
     bool bReady = pStructType->pRegistration->uTCProgress >= ECOMPOUND_DONE_RUNTIME;
     READ_FENCE();
     return bReady;
 }
 
-local_func_inl bool is_compound_type_full_typechecked(const TypeInfo_CompoundBase* pCompoundType)
+local_func_inl bool _is_compound_type_fully_typechecked(const TypeInfo_CompoundBase* pCompoundType)
 {
     bool bReady = pCompoundType->pRegistration->uTCProgress == ECOMPOUND_DONE_ALL;
     READ_FENCE();
@@ -353,11 +368,11 @@ local_func_inl void init_structlike_type_before_tc(TypeInfo_StructLike* ioToInit
     ioToInit->vecIncluded.init(arena);
 }
 
-local_func_inl bool is_type_info_available(const TypeInfo* pType) {
+local_func_inl bool _is_type_info_available(const TypeInfo* pType) {
     if (get_type_kind(pType) != ETypeKind::ETYPEKIND_STRUCTLIKE)
         return true;
     else
-        return is_structlike_type_footprint_available((const TypeInfo_StructLike*)pType);
+        return _is_structlike_type_footprint_available((const TypeInfo_StructLike*)pType);
 }
 
 local_func_inl bool is_target_reg_size_dependent_(const TypeInfo* pType) {
@@ -372,26 +387,26 @@ local_func_inl u8 get_log2_of_vector_count_from_format(u8 uIrFormat) {
 }
 
 local_func_inl u8 get_log2_of_scalar_bytes(const TypeInfo* pType) {
-    Assert_(is_type_info_available(pType));
+    Assert_(_is_type_info_available(pType));
     return get_log2_of_scalar_bytes_from_format(pType->uIRFormat);
 }
 local_func_inl u8 get_log2_of_vector_count(const TypeInfo* pType) {
-    Assert_(is_type_info_available(pType));
+    Assert_(_is_type_info_available(pType));
     return get_log2_of_vector_count_from_format(pType->uIRFormat);
 }
 local_func_inl u32 get_log2_of_align_bytes(const TypeInfo* pType) {
-    Assert_(is_type_info_available(pType));
+    Assert_(_is_type_info_available(pType));
     return pType->uSlotsAndAlign >> 28;
 }
 local_func_inl u32 get_byte_count_of_scalar_elem(const TypeInfo* pType) { return 1u << get_log2_of_scalar_bytes(pType); }
 local_func_inl u32 get_vector_elem_count(const TypeInfo* pType) { return 1u << get_log2_of_vector_count(pType); }
 local_func_inl u32 get_byte_count_of_align(const TypeInfo* pType) { return 1u << get_log2_of_align_bytes(pType); }
 local_func_inl u32 get_slots_count(const TypeInfo* pType) {
-    Assert_(is_type_info_available(pType));
+    Assert_(_is_type_info_available(pType));
     return pType->uSlotsAndAlign & 0x0FFF'FFFFu;
 }
 local_func_inl bool is_ensured_fp_elem_type(const TypeInfo* pType) {
-    Assert_(is_type_info_available(pType));
+    Assert_(_is_type_info_available(pType));
     return 0 != (pType->uIRFormat & 0x08u);
 }
 local_func_inl bool is_a_void_type(const TypeInfo* pType) { return get_slots_count(pType) == 0u; }
@@ -399,7 +414,7 @@ local_func_inl bool is_single_slot(const TypeInfo* pType) { return get_slots_cou
 local_func_inl bool has_scalar_slots(const TypeInfo* pType) { return get_log2_of_vector_count(pType) == 0u; }
 local_func_inl bool is_simple_scalar(const TypeInfo* pType) {return has_scalar_slots(pType) && is_single_slot(pType); }
 local_func_inl u8 get_ir_format(const TypeInfo* pType) {
-    Assert_(is_type_info_available(pType));
+    Assert_(_is_type_info_available(pType));
     return pType->uIRFormat;
 }
 
@@ -421,7 +436,7 @@ local_func u32 get_runtime_unaligned_size(const TypeInfo* pType) {
         return uSizeOfSlot*uSlotCount;
     } else {
         const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)pType;
-        Assert_(is_structlike_type_footprint_available(pAsStructLike));
+        Assert_(_is_structlike_type_footprint_available(pAsStructLike));
         Assert_(pAsStructLike->uUnalignedByteSize <= MAX_SLOT_AND_BYTE_COUNT_OF_USER_TYPE);
         return pAsStructLike->uUnalignedByteSize;
     }

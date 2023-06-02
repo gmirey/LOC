@@ -533,6 +533,16 @@ using Group = GroupPortableImpl;
 
 #endif
 
+#if 0
+#define DBG_SET_PARAMS(impl_instance) \
+    u32 _dbg_capacity = impl_instance._ctrl ? impl_instance.non_null_capacity() : 0u; \
+    u32 _dbg_size = impl_instance._ctrl ? impl_instance.non_null_size() : 0u; \
+    u32 _dbg_growth_left = impl_instance._ctrl ? impl_instance.non_null_growth_left() : 0u; \
+    const u8* _dbg_keys = impl_instance._ctrl ? impl_instance.non_null_keys() : 0; \
+    const u8* _dbg_values = impl_instance._ctrl ? impl_instance.non_null_values() : 0;
+#else
+#define DBG_SET_PARAMS(impl_instance)
+#endif
 
 struct HashSet_Impl {
 
@@ -714,6 +724,7 @@ struct HashSet_Impl {
     // Prunes control bytes to remove as many tombstones as possible.
     template<typename KeyT, typename KeyCheckT, typename ValueT = void>
     void non_null_drop_deletes_without_resize(KeyT* tKeys, ValueT* tValues = 0) {
+        DBG_SET_PARAMS((*this));
         Assert_(_ctrl);
         u8* controlBytes = _ctrl;
         u32 capacity = non_null_capacity();
@@ -792,6 +803,7 @@ struct HashSet_Impl {
     // Sets `ctrl` to `{kEmpty, kSentinel, ..., kEmpty}`, marking the entire
     // array as marked as empty.
     FORCE_INLINE void non_null_reset() {
+        DBG_SET_PARAMS((*this));
         const u32 capacity = non_null_capacity();
         memset(_ctrl, u8(SetMetaDataImpl::kEmpty), capacity + 1 + NumClonedBytes());
         _ctrl[capacity] = u8(SetMetaDataImpl::kSentinel);
@@ -838,6 +850,7 @@ struct HashSet_Impl {
 
     template<typename KeyT, typename KeyQueryT, typename EqFn>
     FORCE_INLINE u32 non_null_find_hash_and_key_index(u64 hashOfKeyToFind, const KeyQueryT& keyToFind, EqFn areEqual, const KeyT* tKeyValues) const {
+        DBG_SET_PARAMS((*this));
         const u32 capacity = non_null_capacity();
         auto seq = probe_seq(H1(hashOfKeyToFind), capacity);
         u8 h2 = H2(hashOfKeyToFind);
@@ -1079,6 +1092,7 @@ public:
     };
 
     FORCE_INLINE iterator begin() {
+        DBG_SET_PARAMS(_impl);
         if (LIKELY(_impl._ctrl)) {
             iterator it(_impl._ctrl, _get_table_keys());
             it.skip_empty_or_deleted_and_check_end();
@@ -1088,6 +1102,7 @@ public:
     }
     FORCE_INLINE iterator end() const { return iterator(0, 0); }
     FORCE_INLINE const_iterator cbegin() const {
+        DBG_SET_PARAMS(_impl);
         if (LIKELY(_impl._ctrl)) {
             const_iterator it(_impl._ctrl, _get_const_table_keys());
             it.skip_empty_or_deleted_and_check_end();
@@ -1098,6 +1113,7 @@ public:
     FORCE_INLINE const_iterator cend() const { return const_iterator(0, 0); }
 
     iterator findHashed(u64 uHashOfKeyToFind, const KeyCheckT& keyToFind) {
+        DBG_SET_PARAMS(_impl);
         if (LIKELY(_impl._ctrl)) {
             const u32 capacity = _impl.non_null_capacity();
             KeyT* tKeys = _get_table_keys();
@@ -1110,6 +1126,7 @@ public:
     }
 
     const_iterator findHashed(u64 uHashOfKeyToFind, const KeyCheckT& keyToFind) const {
+        DBG_SET_PARAMS(_impl);
         if (LIKELY(_impl._ctrl)) {
             const u32 capacity = _impl.non_null_capacity();
             const KeyT* tKeys = _get_const_table_keys();
@@ -1215,6 +1232,7 @@ struct ASet : public SetView<KeyT> {
     };
 
     void _allocate(u32 uNewCapacity) {
+        DBG_SET_PARAMS(_impl);
         Assert_(HashSet_Impl::IsValidCapacity(uNewCapacity));
         u32 uAllocMetaSize = uNewCapacity + 20u + 1u + HashSet_Impl::NumClonedBytes();
         size_t uAllocKeySize = uNewCapacity * sizeof(KeyT);
@@ -1228,6 +1246,7 @@ struct ASet : public SetView<KeyT> {
     }
     FORCE_INLINE u8* non_null_get_start_of_alloc() { return _impl._ctrl - 20u; }
     FORCE_INLINE void clear() {
+        DBG_SET_PARAMS(_impl);
         if (LIKELY(_impl._ctrl)) {
             if (_impl.non_null_capacity() > 127) {
                 _alloc.deallocate((u8*)_get_table_keys());
@@ -1240,6 +1259,7 @@ struct ASet : public SetView<KeyT> {
     }
 
     FORCE_INLINE u32 prepare_insert_not_present_nogrow(u64 uHashOfKeyToInsert) {
+        DBG_SET_PARAMS(_impl);
         u32 uResult = _impl.non_null_find_first_non_full(uHashOfKeyToInsert);
         _impl.non_null_set_ctrl_from_hash(uResult, uHashOfKeyToInsert);
         _impl.growth_left_lhv()--;
@@ -1248,6 +1268,7 @@ struct ASet : public SetView<KeyT> {
     }
 
     u32 prepare_insert_not_present(u64 uHashOfKeyToInsert) {
+        DBG_SET_PARAMS(_impl);
         if (LIKELY(_impl._ctrl)) {
             if (LIKELY(_impl.non_null_growth_left())) {
                 // NOOP
@@ -1266,6 +1287,7 @@ struct ASet : public SetView<KeyT> {
         return prepare_insert_not_present_nogrow(uHashOfKeyToInsert);
     }
     FORCE_INLINE iterator insert_not_present(u64 uHashOfKeyToInsert, const KeyT& keyToInsert) {
+        DBG_SET_PARAMS(_impl);
         u32 uInsertionIndex = prepare_insert_not_present(uHashOfKeyToInsert);
         KeyT* tTableKeys = _get_table_keys();
         tTableKeys[uInsertionIndex] = keyToInsert;
@@ -1273,6 +1295,7 @@ struct ASet : public SetView<KeyT> {
     }
 
     iterator get_or_insert(const KeyT& keyToInsert) {
+        DBG_SET_PARAMS(_impl);
         KeyCheckT asKeyCheckT = (KeyCheckT)keyToInsert;
         u64 uHash = get_map_hash(asKeyCheckT);
         if (LIKELY(_impl._ctrl)) {
@@ -1284,6 +1307,7 @@ struct ASet : public SetView<KeyT> {
     }
 
     FORCE_INLINE iterator get_or_insert_check_hashed(u64 uHash, const KeyCheckT& asKeyCheckT, const KeyT& keyToInsert, bool* outWasInsertedAsNew) {
+        DBG_SET_PARAMS(_impl);
         if (LIKELY(_impl._ctrl)) {
             iterator found = findHashed(uHash, asKeyCheckT);
             if (found != end()) {
@@ -1331,6 +1355,7 @@ struct ASet : public SetView<KeyT> {
 
 
     void resize(u32 uNewCapacity) {
+        DBG_SET_PARAMS(_impl);
         Assert_(HashSet_Impl::IsValidCapacity(uNewCapacity));
         if (_impl._ctrl) {
             ASet<KeyT, AllocT> old = *this;

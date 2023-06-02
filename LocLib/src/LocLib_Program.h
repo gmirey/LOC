@@ -30,6 +30,7 @@
 #include "LocLib_PreParser.h"
 #include "LocLib_PostParserTypes.h"
 #include "LocLib_Postparser.h"
+#include "LocLib_Worker.h"
 #include "LocLib_TypeChecker.h"
 #include "LocLib_ir_dump.h"
 
@@ -720,7 +721,7 @@ local_func bool make_ast_for_source_file(int iSourceFileIndex,
         pSourceFile->tBlocks = 0;
         bResult = false; // in case of irrecoverable scanner error
     }
-    pSourceFile->pRootNamespace->eCompState = ESOURCE_COMP_STATE_DONE_PARSED;
+    pSourceFile->pRootNamespace->uTCProgress = ESOURCE_COMP_STATE_DONE_PARSED;
 
     release_arena(&blockParsingArena);
     release_arena(&blockVectorArena);
@@ -753,6 +754,14 @@ local_func TCContext* make_typecheck_task_for_whole_source_file(SourceFileDescAn
     pResult->pCurrentBlock = 0; // marker for starting by alloc-and-init of block 0
     pResult->pNamespace = pSourceFile->pRootNamespace;
     pResult->pRepo = &(pSourceFile->filewiseConstRepo);
+    pResult->setOfNewlyDeclaredIdentifiers = {}; // will be init later, at task start
+
+    pResult->uSizeOfVecUsingAccessibleEnumBefore = 0u;
+    pResult->uSizeOfVecUsingAccessibleNamespaceBefore = 0u;
+    pResult->uSizeOfVecUsingAllEnumBefore = 0u;
+    pResult->uSizeOfVecUsingAllNamespaceBefore = 0u;
+    pResult->uSizeOfVecChildrenNamespacesBefore = 0u;
+    pResult->uSizeOfVecIncludedStructLikeBefore = 0u;
 
     // the following are unused for basic, root level context
 
@@ -764,8 +773,11 @@ local_func TCContext* make_typecheck_task_for_whole_source_file(SourceFileDescAn
     pResult->pParentContext = 0;
     pResult->pVecOfGotoPlaceholdersToReturnPoint = 0;
 
+    pResult->eTaskPrio = ETaskPriority::ETASKPRIO_HIGHEST;
+
     pResult->uGlobalStatementOnHold = 0;
     pResult->mapLocalNodeInfoIfResumingCurrentStatement = {};
+    pResult->waitingReason._packed = u64(EWR_NONE);
 
     return pResult;
 }
@@ -1113,6 +1125,8 @@ local_func void print_event_TCMG_TC_STATEMENT_to(char* szBuffer, const TracableE
 local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
 {
     Assert_(pTCContext->pWorker);
+    ArenaRefPoint tmpArenaBefore = get_arena_ref_point(pTCContext->pWorker->tmpArena);
+    defer { reset_arena_no_release_to(tmpArenaBefore, pTCContext->pWorker->tmpArena); };
 
     pTCContext->bResumingCurrentStatement = 0;
 
@@ -1127,6 +1141,14 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
                 u32(pTCContext->pIsolatedSourceFile->iRegistrationIndex),
                 pTCContext->pIsolatedSourceFile->sourceFileName, false),
                 pTCContext->pWorker);
+
+            pTCContext->setOfNewlyDeclaredIdentifiers.init(pTCContext->pIsolatedSourceFile->localArena); // TODO: another tmp which persists after this call
+            Assert_(pTCContext->pNamespace);
+            Assert_(pTCContext->pNamespace->vecAccessibleUsedEnums.size() == 0u);
+            Assert_(pTCContext->pNamespace->vecAllUsedEnums.size() == 0u);
+            Assert_(pTCContext->pNamespace->vecAccessibleUsedNamespaces.size() == 0u);
+            Assert_(pTCContext->pNamespace->vecAllUsedNamespaces.size() == 0u);
+            Assert_(pTCContext->pNamespace->vecChildrenNamespaces.size() == 0u);
 
             if (pTCContext->pIsolatedSourceFile->iBlockCount > 0 && pTCContext->pIsolatedSourceFile->tBlocks->uStatementCount > 0)
                 pTCContext->pCurrentBlock = tc_alloc_and_init_base_block(0, ECTXKIND_GLOBAL_PACKAGE, 0, pTCContext);
@@ -1156,6 +1178,12 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
             pTCContext->vecTypecheckedBlocks.append(pRootTCBlock);
 
         } else { Assert_(pTCContext->pCompoundToTC); // Structs, Unions, Enums, 
+            Assert_(pTCContext->pCompoundToTC->pCompoundType);
+            if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                pTCContext->setOfNewlyDeclaredIdentifiers.init(pTCContext->pIsolatedSourceFile->localArena); // TODO: another tmp which persists after this call
+                TypeInfo_StructLike* pAsStructLike = (TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType;
+                Assert_(pAsStructLike->vecIncluded.size() == 0u);
+            }
             Assert_(pTCContext->eKind == ETypecheckContextKind::ECTXKIND_COMPOUND);
             Assert_(pTCContext->eBlockKind == ETypecheckBlockKind::EBLOCKKIND_BASE);
             Assert_(pTCContext->pIsolatedSourceFile->iBlockCount > 0 && pTCContext->pIsolatedSourceFile->tBlocks->uStatementCount > 0);
@@ -1184,6 +1212,14 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
                 uStatementToResume, pTCContext->pCurrentBlock->uAstBlockIndex),
                 pTCContext->pWorker);
 
+            pTCContext->setOfNewlyDeclaredIdentifiers.init(pTCContext->pIsolatedSourceFile->localArena); // TODO: another tmp which persists after this call
+            Assert_(pTCContext->pNamespace);
+            pTCContext->uSizeOfVecUsingAccessibleEnumBefore = pTCContext->pNamespace->vecAccessibleUsedEnums.size();
+            pTCContext->uSizeOfVecUsingAccessibleNamespaceBefore = pTCContext->pNamespace->vecAccessibleUsedNamespaces.size();
+            pTCContext->uSizeOfVecUsingAllEnumBefore = pTCContext->pNamespace->vecAllUsedEnums.size();
+            pTCContext->uSizeOfVecUsingAllNamespaceBefore = pTCContext->pNamespace->vecAllUsedNamespaces.size();
+            pTCContext->uSizeOfVecChildrenNamespacesBefore = pTCContext->pNamespace->vecChildrenNamespaces.size();
+
             Assert_(pStatement->uLastIRorGlobalTCResult == 1 + ETCResult::ETCR_WAITING);
             pStatement->uLastIRorGlobalTCResult = 0;
             pTCContext->bResumingCurrentStatement = 1u;
@@ -1194,6 +1230,12 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
             TRACE_ENTER(ELOCPHASE_TC_MGR, _LLVL2_IMPORTANT_INFO, EventTCMG_TC_PROC(pTCContext, true), pTCContext->pWorker);
 
         } else { Assert_(pTCContext->pCompoundToTC); // resuming a struct, union, or enum body-TC-task
+            Assert_(pTCContext->pCompoundToTC->pCompoundType);
+            if (get_type_kind(pTCContext->pCompoundToTC->pCompoundType) == ETypeKind::ETYPEKIND_STRUCTLIKE) {
+                pTCContext->setOfNewlyDeclaredIdentifiers.init(pTCContext->pIsolatedSourceFile->localArena); // TODO: another tmp which persists after this call
+                TypeInfo_StructLike* pAsStructLike = (TypeInfo_StructLike*)pTCContext->pCompoundToTC->pCompoundType;
+                pTCContext->uSizeOfVecIncludedStructLikeBefore = pAsStructLike->vecIncluded.size();
+            }
             u32 uStatementToResume = pTCContext->uGlobalStatementOnHold;
             pTCContext->pCurrentBlock->uStatementBeingTypechecked = uStatementToResume;
             Assert_(uStatementToResume < pTCContext->pCurrentBlock->vecStatements.size());
@@ -1245,6 +1287,7 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
                                     "TC task at non-seq scope reached an already TC'd statement. Ending current task right there"), pTCContext->pWorker);
                                 return ETCResult::ETCR_SUCCESS;      // => marks the end of a resumed typecheck at a non-sequential scope
                             }
+                            pTCContext->uFlags &= ~CTXFLAG_CURRENT_TC_STRUCTCONST; // this is a per-statement flag...
                         } else {
                             Assert_(0 == pStatement->uLastIRorGlobalTCResult);
                         }
