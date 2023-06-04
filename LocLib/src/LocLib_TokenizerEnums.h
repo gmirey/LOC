@@ -210,11 +210,11 @@ local_func_inl bool is_token_symbol_or_keyword(ETokenKind eKind) { return (eKind
 	KEYWORD("#elif", PAN_ELIF,) \
 	KEYWORD("#else", PAN_ELSE,) \
 	KEYWORD("#endif", PAN_ENDIF,) \
-	KEYWORD("#scope", PAN_SCOPE,) \
-	KEYWORD("public", PUBLIC,) \
-	KEYWORD("package", PACKAGE,) \
-	KEYWORD("private", PRIVATE,) \
-	KEYWORD("#endscope", PAN_ENDSCOPE,)
+	KEYWORD("#private", PAN_PRIVATE,) \
+	KEYWORD("#endprivate", PAN_ENDPRIVATE,) \
+	KEYWORD("#namespace", PAN_NAMESPACE,) \
+	KEYWORD("#endnamespace", PAN_ENDNAMESPACE,)
+
 
 // Macro-magic... cf "A Note on enums-and-structs synchronization"
 enum EKeyword : u8 {

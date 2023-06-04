@@ -269,8 +269,10 @@ static const u8 EPRENODE_MODIFIER_NODE              = COUNT_NODE_KINDS+8u; // @-
     STATEMENT_KIND(PAN_ELIF,            "<-     PAN_ELIF      ->") \
     STATEMENT_KIND(PAN_ELSE,            "<-     PAN_ELSE      ->") \
     STATEMENT_KIND(PAN_ENDIF,           "<-    PAN_ENDIF      ->") \
-    STATEMENT_KIND(PAN_SCOPE,           "<-    PAN_SCOPE      ->") \
-    STATEMENT_KIND(PAN_ENDSCOPE,        "<-   PAN_ENDSCOPE    ->") \
+    STATEMENT_KIND(PAN_PRIVATE,         "<-   PAN_PRIVATE     ->") \
+    STATEMENT_KIND(PAN_ENDPRIVATE,      "<-  PAN_ENDPRIVATE   ->") \
+    STATEMENT_KIND(PAN_NAMESPACE,       "<-  PAN_NAMESPACE    ->") \
+    STATEMENT_KIND(PAN_ENDNAMESPACE,    "<- PAN_ENDNAMESPACE  ->") \
         \
         /* the following will keep their main node as postnode (unless 'load' and 'using' as statements) */ \
     STATEMENT_KIND(SINGLE_EXPRESSION,   "<- SINGLE_EXPRESSION ->") \
@@ -349,7 +351,8 @@ typedef void StatementParsingProc_Sign (PreStatement* pStatement, ParserParams& 
     STATEMENT_FN_PREDECL(special_load) \
     STATEMENT_FN_PREDECL(pan_opening) \
     STATEMENT_FN_PREDECL(pan_else) \
-    STATEMENT_FN_PREDECL(pan_closing)
+    STATEMENT_FN_PREDECL(pan_closing) \
+    STATEMENT_FN_PREDECL(pan_private)
 
 // In prep of Macro-magic...
 typedef PreAstNode* SpeContinuationParsingProc_Sign (ParserParams& parserParams, PreAstNode* pLHSExpr, u16 uDepthGuard, u16* outError);
@@ -603,11 +606,10 @@ typedef PreAstNode* SpeContinuationParsingProc_Sign (ParserParams& parserParams,
 	PARSER_META(PAN_ELIF            , STATEMENT         , 0  ,               ,               ,    pan_opening,               ) \
 	PARSER_META(PAN_ELSE            , STATEMENT         , 0  ,               ,               ,       pan_else,               ) \
 	PARSER_META(PAN_ENDIF           , STATEMENT         , 0  ,               ,               ,    pan_closing,               ) \
-	PARSER_META(PAN_SCOPE           , STATEMENT         , 0  ,               ,               ,    pan_opening,               ) \
-	PARSER_META(PUBLIC              , EXPR_             , 0  ,  special_token,               ,               ,               ) \
-	PARSER_META(PACKAGE             , EXPR_             , 0  ,  special_token,               ,               ,               ) \
-	PARSER_META(PRIVATE             , EXPR_             , 0  ,  special_token,               ,               ,               ) \
-	PARSER_META(PAN_ENDSCOPE        , STATEMENT         , 0  ,               ,               ,    pan_closing,               )
+	PARSER_META(PAN_PRIVATE         , STATEMENT         , 0  ,               ,               ,    pan_private,               ) \
+	PARSER_META(PAN_ENDPRIVATE      , STATEMENT         , 0  ,               ,               ,    pan_closing,               ) \
+	PARSER_META(PAN_NAMESPACE       , STATEMENT         , 0  ,               ,               ,    pan_opening,               ) \
+	PARSER_META(PAN_ENDNAMESPACE    , STATEMENT         , 0  ,               ,               ,    pan_closing,               )
 
 // Macro-magic... cf "A Note on enums-and-structs synchronization" in LocLib_TokenizerEnums.h
 // Checking parser table

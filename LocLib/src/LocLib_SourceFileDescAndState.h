@@ -136,8 +136,7 @@ struct SourceFileDescAndState {
         ioToInit->uCountGlobalAccessibleTasks = 0u;
         ioToInit->uCountGlobalPrivateTasks = 0u;
 
-        ioToInit->vecLocalTasksWaitingForCompletion.init(localArena);
-        ioToInit->vecNonLocalTasksWaitingForCompletion.init(localArena);
+        ioToInit->vecTasksWaitingForCompletion.init(localArena);
 
         ioToInit->iPrimaryIdentifier = -1;
     }

@@ -83,19 +83,29 @@ local_func ValueBinding* find_binding_within_structlike(int iIdentifierHandle, u
 }
 
 local_func ValueBinding* find_binding_within_namespace_in_same_file(int iIdentifierHandle, u64 uHash, TCNamespace* pNamespace,
-    bool bAllowParents, TCContext* pTCContext, bool bSetUnshadowing = false)
+    bool bAllowParents, TCContext* pTCContext, bool bSetUnshadowing = false, bool* outLocalShadow = 0)
 {
     Assert_(pNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile);
+    Assert_(!bSetUnshadowing || outLocalShadow == 0);
     auto itFound = pNamespace->mapAllBindingsInclUsing.findHashed(uHash, iIdentifierHandle);
     if (itFound != pNamespace->mapAllBindingsInclUsing.end()) {
         return itFound.value();
     }
     if (bSetUnshadowing)
         pNamespace->setLocalUnshadowing.insertHashed(uHash, iIdentifierHandle);
+    else if (outLocalShadow) {
+        if (pNamespace->setLocalUnshadowing.findHashed(uHash, iIdentifierHandle) != pNamespace->setLocalUnshadowing.end()) {
+            *outLocalShadow = true;
+            return reinterpret_cast<ValueBinding*>(0x0000'0000'0000'DEADuLL);
+        } else {
+            *outLocalShadow = false;
+        }
+    }
 
     // If ref namespace is in current file, then it is common that we ask for an *unqualified* name search, ie. taking current *parents* into account
     if (bAllowParents && pNamespace->pParent) {
-        return find_binding_within_namespace_in_same_file(iIdentifierHandle, uHash, pNamespace->pParent, true, pTCContext, bSetUnshadowing);
+        return find_binding_within_namespace_in_same_file(iIdentifierHandle, uHash, pNamespace->pParent, true, pTCContext,
+            bSetUnshadowing, outLocalShadow);
     }
     return 0;
 }
@@ -113,15 +123,17 @@ local_func ValueBinding* find_binding_within_namespace_in_other_file(int iIdenti
 }
 
 local_func_inl ValueBinding* find_binding_within_namespace(int iIdentifierHandle, u64 uHash, TCNamespace* pNamespace,
-    bool bAllowParents, TCContext* pTCContext, bool bSetUnshadowing = false)
+    bool bAllowParents, TCContext* pTCContext, bool bSetUnshadowing = false, bool* outLocalShadow = 0)
 {
     // If ref namespace is in current file, we'll take *privates* into account)
     if (pNamespace->pOriginalSourceFile == pTCContext->pIsolatedSourceFile) {
-        return find_binding_within_namespace_in_same_file(iIdentifierHandle, uHash, pNamespace, bAllowParents, pTCContext, bSetUnshadowing);
+        return find_binding_within_namespace_in_same_file(iIdentifierHandle, uHash, pNamespace, bAllowParents, pTCContext,
+            bSetUnshadowing, outLocalShadow);
     } else { // Ref namespace is in another file => access supposed only once done
         Assert_(pNamespace->uTCProgress >= ESOURCE_COMP_STATE_DONE_ACCESSIBLE_DISCOVERY);
         Assert_(!bAllowParents);
         Assert_(!bSetUnshadowing);
+        Assert_(outLocalShadow == 0);
         return find_binding_within_namespace_in_other_file(iIdentifierHandle, uHash, pNamespace, pTCContext);
     }
 }

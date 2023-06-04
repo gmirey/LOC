@@ -104,8 +104,7 @@ struct TCNamespace {
     u32 uCountGlobalAccessibleTasks;
     u32 uCountGlobalPrivateTasks;
 
-    TmpArray<TCContext*> vecLocalTasksWaitingForCompletion;     // All tasks in same file waiting for this namespace's completion (assumed of private + accessible)
-    TmpArray<TCContext*> vecNonLocalTasksWaitingForCompletion;  // All tasks in other files waiting for this namespace's completion (of accessible)
+    TmpArray<TCContext*> vecTasksWaitingForCompletion;     // All tasks in same file waiting for this namespace's completion (assumed of private + accessible)
 
     i32 iPrimaryIdentifier;
     u32 _pad0;

@@ -252,8 +252,7 @@ struct TCCompoundRegistration {
 
     SourceFileDescAndState* pSourceFile;
 
-    TmpArray<TCContext*> vecLocalTasksWaitingForCompletion;     // All tasks in same file waiting for this compound's completion (currently indifferently full or runtime only)
-    TmpArray<TCContext*> vecNonLocalTasksWaitingForCompletion;  // All tasks in other files waiting for this compound's completion (currently indifferently full or runtime only)
+    TmpArray<TCContext*> vecTasksWaitingForCompletion;     // All tasks in same file waiting for this compound's completion (currently indifferently full or runtime only)
     
     // Tasks remaining to be done before we can flag ourselves (and notify) as being done with either private or non-private declaration gathering
     // Note: Those are indifferently waiting, or ready to lauch, or being TC'd. Will be decremented on task completion.
@@ -800,8 +799,17 @@ struct ProcLikeParam {
     u32 uOptDefaultValueNodeIndex;
     ValueBinding* pBinding;
 };
+
+enum EProcSignTCStatus : u32 {
+    EPROCSIGN_NOT_FINALIZED,
+    EPROCSIGN_PARAMS_FULLY_SIZED,
+    EPROCSIGN_IN_ERROR,
+};
+
 struct TypeInfo_ProcLike : public TypeInfo_UserBase {
     TmpArray<ProcLikeParam> params;
+    u32 volatile uReadyStatus; // EProcSignTCStatus
+    u32 _pad0;
 };
 local_func_inl u8 get_proc_kind(const TypeInfo_ProcLike* pProcSign) { return pProcSign->_coreType; }
 local_func_inl u8 get_total_param_count(const TypeInfo_ProcLike* pProcSign) { return u8(pProcSign->params.size()); }

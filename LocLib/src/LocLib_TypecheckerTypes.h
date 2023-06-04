@@ -288,8 +288,7 @@ struct TCProcBodyResult {
     FFString foreignSymbolName;
     GraphResult* pGraphResult;
 
-    TmpArray<TCContext*> vecLocalTasksWaitingForCompletion;     // All tasks in same file waiting for this proc's completion
-    TmpArray<TCContext*> vecNonLocalTasksWaitingForCompletion;  // All tasks in other files waiting for this proc's completion
+    TmpArray<TCContext*> vecTasksWaitingForCompletion;     // All tasks in same file waiting for this proc's completion
 };
 
 struct TCProcBodyRegistration {

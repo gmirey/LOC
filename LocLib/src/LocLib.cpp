@@ -167,7 +167,9 @@ exported_func_impl void prepare_results(WholeProgramCompilationState* pProgCompS
 #if defined(LOG_TRACES_IN_FILE) && TRACABLE_EVENTS_KEEP_FULL_LOG
     #define prepare_results_and_return(what) do { \
         prepare_results(pProgCompilationState, pOsFuncs, pCompilationParams, oCompilationResults); \
-        log_traces_to_file(pProgCompilationState, &mainWorker, LOG_TRACES_IN_FILE); /* TODO: multi-worker */ \
+        if (pProgCompilationState->pCompilationParams->bEmitAvailableTraces) { \
+            log_traces_to_file(pProgCompilationState, &mainWorker, LOG_TRACES_IN_FILE); /* TODO: multi-worker */ \
+        } \
         return what; \
     } while (0)
 #else
@@ -202,9 +204,11 @@ local_func void log_traces_to_file(WholeProgramCompilationState* pProgState, Wor
 
     static_assert(TRACABLE_EVENTS_KEEP_FULL_LOG, "allo?");
 
-    platform_log_info("Writing log report to '", false);
-    platform_log_info(fileName, false);
-    platform_log_info("'", true);
+    if (!pProgState->pCompilationParams->bSilentOutput) {
+        platform_log_info("Writing log report to '", false);
+        platform_log_info(fileName, false);
+        platform_log_info("'", true);
+    }
 
     EFileOpenErr err;
     PlatformFileHandle logFile = platform_open_file_for_writing(fileName, &err);

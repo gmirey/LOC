@@ -116,6 +116,9 @@ typedef struct LocLib_CompilationParams {
     bool bComptimeFloatIs64;
     bool bLittleEndianTarget;
     bool bRuntimeChecksOn;
+    bool bEmitIRDump;
+    bool bEmitAvailableTraces;
+    bool bSilentOutput;
     u32 uMaxCompintLegs;
     u64 tPersistentStorage[16];
 	// TODO

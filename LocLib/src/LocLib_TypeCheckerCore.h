@@ -537,11 +537,9 @@ local_func ETCResult add_waiting_task_for_compound_body_already_event_locked_iff
     TCContext* pWaitingContext = get_current_or_spawn_new_context_on_wait(pTCContext);
     pWaitingContext->waitingReason = waitingReason;
 
+    pAsCompound->pRegistration->vecTasksWaitingForCompletion.append(pWaitingContext);
     if (pAsCompound->pRegistration->pSourceFile != pTCContext->pIsolatedSourceFile) {
-        pAsCompound->pRegistration->vecNonLocalTasksWaitingForCompletion.append(pWaitingContext);
         release_source_file_specific_event_lock(pAsCompound->pRegistration->pSourceFile, pTCContext->pWorker);
-    } else {
-        pAsCompound->pRegistration->vecLocalTasksWaitingForCompletion.append(pWaitingContext);
     }
 
     on_registered_new_waiting_task(pWaitingContext);
@@ -566,7 +564,7 @@ local_func ETCResult add_waiting_task_for_already_event_locked_othersource_names
     TCContext* pWaitingContext = get_current_or_spawn_new_context_on_wait(pTCContext);
     pWaitingContext->waitingReason = waitingReason;
 
-    pNamespace->vecNonLocalTasksWaitingForCompletion.append(pWaitingContext);
+    pNamespace->vecTasksWaitingForCompletion.append(pWaitingContext);
     release_source_file_specific_event_lock(pNamespace->pOriginalSourceFile, pTCContext->pWorker);
 
     on_registered_new_waiting_task(pWaitingContext);
@@ -591,7 +589,7 @@ local_func ETCResult add_waiting_task_for_fully_discovered_namespace_in_same_sou
     TCContext* pWaitingContext = get_current_or_spawn_new_context_on_wait(pTCContext);
     pWaitingContext->waitingReason = waitingReason;
 
-    pNamespace->vecLocalTasksWaitingForCompletion.append(pWaitingContext);
+    pNamespace->vecTasksWaitingForCompletion.append(pWaitingContext);
 
     on_registered_new_waiting_task(pWaitingContext);
     return ETCResult::ETCR_WAITING;
@@ -1143,6 +1141,48 @@ local_func ERangeCheckResultReason is_compint_outside_integral_range_returning_r
         // TODO
         platform_log_error("is_compint_outside_integral_range_returning_reason() : not yet implemented for non-embedded compint values");
         return ERangeCheckResultReason::ERCR_ERROR;
+    }
+}
+
+local_func ETCResult try_finalize_procsign(const TypeInfo_ProcLike* pProcSign, TCStatement* pStatementWithSignature, TCContext* pTCContext)
+{
+    u8 uTotalParams = get_total_param_count(pProcSign);
+    if (pProcSign->uReadyStatus == EProcSignTCStatus::EPROCSIGN_NOT_FINALIZED) {
+        for (u8 uParam = 0u; uParam < uTotalParams; uParam++) {
+            const ProcLikeParam& param = pProcSign->params[uParam];
+            Assert_(param.pBinding);
+            Assert_(param.pBinding->pType);
+            if (get_type_kind(param.pBinding->pType) == ETYPEKIND_STRUCTLIKE) { /* TODO:CLEANUP: what about distinct alias */
+                const TypeInfo_StructLike* pAsStructLike = (const TypeInfo_StructLike*)param.pBinding->pType;
+                if (!is_structlike_type_footprint_available_otherwise_return_locked_for_wait_if_nonlocal(pAsStructLike, pTCContext)) {
+                    return add_waiting_task_for_compound_body_already_event_locked_iff_other_file(pAsStructLike, 0u, pTCContext);
+                } else if (pAsStructLike->_coreFlags & COMPOUNDFLAG_BODY_IN_ERROR_RUNTIME) {
+                    // TODO: CLEANUP: temporary forced log
+                    platform_log_info("*** Tmp TC-Error Report : try_finalize_procsign() : first hand detection of compound footprint in-error");
+                    InterlockedExch32(&const_cast<TypeInfo_ProcLike*>(pProcSign)->uReadyStatus, EProcSignTCStatus::EPROCSIGN_IN_ERROR);
+                    goto on_error;
+                }
+            }
+        }
+        InterlockedExch32(&const_cast<TypeInfo_ProcLike*>(pProcSign)->uReadyStatus, EProcSignTCStatus::EPROCSIGN_PARAMS_FULLY_SIZED);
+        return ETCResult::ETCR_SUCCESS;
+    } else {
+        Assert_(pProcSign->uReadyStatus == EPROCSIGN_PARAMS_FULLY_SIZED || pProcSign->uReadyStatus == EPROCSIGN_IN_ERROR);
+    }
+
+    if (pProcSign->uReadyStatus == EProcSignTCStatus::EPROCSIGN_IN_ERROR) { on_error:
+        // TODO: CLEANUP: temporary forced log
+        platform_log_info("*** Tmp TC-Error Report : try_finalize_procsign() : procsign in-error");
+        LocLib_Error tmpTypeCheckError;
+	    tmpTypeCheckError.errCode = CERR_PROCSIGN_IN_ERROR;
+        tmpTypeCheckError.uBlockOrLineIfScanErr = pStatementWithSignature->uBlockIndexInSourceFile;
+        tmpTypeCheckError.uStatement = pStatementWithSignature->uStatementIndexInBlock;
+        tmpTypeCheckError.uTokenRef = pStatementWithSignature->vecNodes[0u]->ast.uPivotalTokenPackedRef;
+        // TODO: CLEANUP: ref as source should be pStatementWithSignature->iSourceFileIndex
+        pTCContext->pIsolatedSourceFile->vecErrors.append(tmpTypeCheckError);
+        return ETCResult::ETCR_ERROR;
+    } else {
+        return ETCResult::ETCR_SUCCESS;
     }
 }
 

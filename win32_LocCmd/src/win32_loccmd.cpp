@@ -962,15 +962,15 @@ int wmain( int argc, wchar_t *argv[ ], wchar_t *envp[ ] )
     UNUSED(envp);
 	if (argc != 2) {
 		if (argc < 2)
-			log_info("Too few arguments passed to Dog command line...");
+			log_info("Too few arguments passed to LOC command line...");
 		else
-			log_info("Too many arguments passed to Dog command line...");
-		log_info("Usage : dog.exe your_filename.dog\n");
+			log_info("Too many arguments passed to LOC command line...");
+		log_info("Usage : loc.exe your_filename.loc\n");
 		return -1;
 	}
 	
 	if (argv[1] == 0) {
-		log_info("Unexpected null argument to Dog command line.");
+		log_info("Unexpected null argument to LOC command line.");
 		return -2;
 	}
 	
@@ -1078,6 +1078,9 @@ int wmain( int argc, wchar_t *argv[ ], wchar_t *envp[ ] )
     compilationParams.bLittleEndianTarget = true;
     compilationParams.bRuntimeChecksOn = true;
     compilationParams.uMaxCompintLegs = 4u; // TODO: expand this to go beyond 64b embeddeds... set to what ??? 1024b ? max bigint impl of 64K * 16b ???
+    compilationParams.bEmitIRDump = true;
+    compilationParams.bEmitAvailableTraces = true;
+    compilationParams.bSilentOutput = false;
 
 	log_info("compiling...");
 	LocLib_CompilationResults compilationResults;
@@ -1146,6 +1149,6 @@ int wmain( int argc, wchar_t *argv[ ], wchar_t *envp[ ] )
     */
     // TMP TMP TMP TMP
 
-	log_info("now closing");
+	//log_info("now closing");
 	return 0;
 }

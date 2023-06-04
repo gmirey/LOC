@@ -2879,8 +2879,8 @@ declare_statement_parsing_fn(pan_opening)
     if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ELIF) {
         uStatementKind = ESTATEMENT_PAN_ELIF;
         pStatement->uStatementFlags |= ESTATEMENTFLAGS_BLOCK_ENDING_PAN_DIRECTIVE;
-    } else if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_SCOPE) {
-        uStatementKind = ESTATEMENT_PAN_SCOPE;
+    } else if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_NAMESPACE) {
+        uStatementKind = ESTATEMENT_PAN_NAMESPACE;
     } else {
         Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_IF);
     }
@@ -2924,6 +2924,26 @@ declare_statement_parsing_fn(pan_else)
 }
 
 // PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
+declare_statement_parsing_fn(pan_private)
+{
+#if TRACE_PRE_PARSER_PRINTLEVEL > 2
+    debug_print_indent(uDepthGuard*2 + 1);
+    platform_log_info("> special pan-statement 'private'", true);
+#endif
+    Token* pCurrent = parserParams.parserState.pCurrentToken;
+    reference_current_token_as(panSt);
+    pStatement->pivotToken1 = panSt;
+    Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_PRIVATE);
+    pStatement->uStatementKind = ESTATEMENT_PAN_PRIVATE;
+    pStatement->uExpectedNextBlockSpawning = EBLOCK_SPAWNING_PAN_DIRECTIVE;
+    pCurrent = ++parserParams.parserState.pCurrentToken;
+    if (pCurrent < parserParams.parserState.pLineTokenEnd) {
+        make_err_pre_node_expected_vs_found(pStatement->pMainNode, 0, "Pan-private does not expect anything afterwards");
+        return;
+    }
+}
+
+// PreStatement* pStatement, ParserParams& parserParams, u16 uDepthGuard, u16* outError
 declare_statement_parsing_fn(pan_closing)
 {
 #if TRACE_PRE_PARSER_PRINTLEVEL > 2
@@ -2934,8 +2954,10 @@ declare_statement_parsing_fn(pan_closing)
     reference_current_token_as(panSt);
     pStatement->pivotToken1 = panSt;
     u8 uStatementKind = ESTATEMENT_PAN_ENDIF;
-    if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ENDSCOPE)
-        uStatementKind = ESTATEMENT_PAN_ENDSCOPE;
+    if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ENDPRIVATE)
+        uStatementKind = ESTATEMENT_PAN_ENDPRIVATE;
+    else if (u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ENDNAMESPACE)
+        uStatementKind = ESTATEMENT_PAN_ENDNAMESPACE;
     else {
         Assert_(u8(pCurrent->uTokenPayloadAndKind >> 8) == EKEY_PAN_ENDIF);
     }

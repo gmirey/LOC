@@ -191,13 +191,25 @@ local_func void _check_paired_statements(BlockParsingState* pCurrentBlock, TmpAr
     }
 
     switch(pPreStatement->uStatementKind) {
-        case ESTATEMENT_PAN_ENDSCOPE:
+        case ESTATEMENT_PAN_ENDNAMESPACE:
             if (bLastStatementInError || !firstNodeInLastStatement ||
                 u8(firstNodeInLastStatement->uNodeKindAndFlags) != ENODE_ST_PAN_SPECIAL ||
-                u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_SCOPE)
+                u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_NAMESPACE)
             {
 #if TRACE_PRE_PARSER_PRINTLEVEL > 0
-                platform_log_info("*** #endscope directive without matching #scope (as last statement of same block)", true);
+                platform_log_info("*** #endnamespace directive without matching #namespace (as last statement of same block)", true);
+#endif
+                post_parser_set_error_from_pre_statement(PERR_PAIRED_STATEMENT_MISSING_MATCHING_STATEMENT, pPreStatement);
+            }
+            return;
+
+        case ESTATEMENT_PAN_ENDPRIVATE:
+            if (bLastStatementInError || !firstNodeInLastStatement ||
+                u8(firstNodeInLastStatement->uNodeKindAndFlags) != ENODE_ST_PAN_SPECIAL ||
+                u8(firstNodeInLastStatement->uNodeKindAndFlags >> 8) != EKEY_PAN_PRIVATE)
+            {
+#if TRACE_PRE_PARSER_PRINTLEVEL > 0
+                platform_log_info("*** #endprivate directive without matching #private (as last statement of same block)", true);
 #endif
                 post_parser_set_error_from_pre_statement(PERR_PAIRED_STATEMENT_MISSING_MATCHING_STATEMENT, pPreStatement);
             }
@@ -1006,7 +1018,7 @@ local_func u32 _convert_pre_statement_to_node(u32* ioWrittenNodes, AstNode* tNod
 
         case ESTATEMENT_PAN_IF:                  // #if <condition>  ///
         case ESTATEMENT_PAN_ELIF:                // (#if/#elif) ... #elif <condition>  ///
-        case ESTATEMENT_PAN_SCOPE:               // #scope <level> ///
+        case ESTATEMENT_PAN_NAMESPACE:           // #namespace <id> ///
             pNode->uNodeKindAndFlags = ENODE_ST_PAN_SPECIAL;
             pNode->uNodeKindAndFlags |= pPreStatement->pivotToken1.token.uTokenPayloadAndKind & 0x0000'FF00u;
             if (_check_is_single_simple_expression(pPreStatement->pMainNode, 0, pPreStatement, outError)) {
@@ -1017,13 +1029,15 @@ local_func u32 _convert_pre_statement_to_node(u32* ioWrittenNodes, AstNode* tNod
 
         case ESTATEMENT_PAN_ELSE:                // (#if/#elif) ... #else ///
         case ESTATEMENT_PAN_ENDIF:               // (#if) ... #endif
-        case ESTATEMENT_PAN_ENDSCOPE:            // (#scope) ... #endscope
+        case ESTATEMENT_PAN_PRIVATE:             // #private ///
+        case ESTATEMENT_PAN_ENDPRIVATE:          // (#private) ... #endprivate
+        case ESTATEMENT_PAN_ENDNAMESPACE:        // (#namespace) ... #endnamespace
             pNode->uNodeKindAndFlags = ENODE_ST_PAN_SPECIAL;
             pNode->uNodeKindAndFlags |= pPreStatement->pivotToken1.token.uTokenPayloadAndKind & 0x0000'FF00u;
             pNode->uPrimaryChildNodeIndex = INVALID_NODE_INDEX;
             break;
 
-        case ESTATEMENT_USING:                   // using #load "somefile.loc"
+        case ESTATEMENT_USING:                   // using #load "somefile.loc" ; using <namespace> ; using <enum> ; including <structlike>
             pNode->uNodeKindAndFlags = ENODE_ST_USING;
             pNode->uNodeKindAndFlags |= pPreStatement->pivotToken1.token.uTokenPayloadAndKind & 0x0000'FF00u;
             if (_check_is_single_simple_expression(pPreStatement->pMainNode, 0, pPreStatement, outError)) {

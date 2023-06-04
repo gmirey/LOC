@@ -33,6 +33,10 @@ local_func ETCResult typecheck_param_list(u32 uStartingNodeIndex, TCStatement* p
     u32 uCurrentNodeIndex = uStartingNodeIndex;
     TCNode* pCurrentNode = pTCStatement->vecNodes[uCurrentNodeIndex];
 
+    if (pOptSign) {
+        Assert_(pOptSign->uReadyStatus == EProcSignTCStatus::EPROCSIGN_PARAMS_FULLY_SIZED);
+    }
+
     while (u8(pCurrentNode->ast.uNodeKindAndFlags) == ENodeKind::ENODE_EXPRLIST_NODE) {
         u32 uNextNodeIndex = pCurrentNode->ast.uSecondaryChildNodeIndex;
 
@@ -409,6 +413,12 @@ local_func ETCResult typecheck_invocation_form(TmpTCNode* pExpr, TCStatement* pT
                     }
 
                     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED("Typechecking invocation of a proclike"), pTCContext->pWorker);
+
+                    if (pProcLikeType->uReadyStatus != EProcSignTCStatus::EPROCSIGN_PARAMS_FULLY_SIZED) {
+                        ETCResult eCheckSign = try_finalize_procsign(pProcLikeType, pTCStatement, pTCContext);
+                        success_or_return_wait_or_error(eCheckSign, pExpr->pTCNode);
+                    }
+                    READ_FENCE(); // We were basing ourselves on volatile 'uReadyStatus'
 
                     u8 uExpectedInParamsCount = get_input_param_count(pProcLikeType);
                     // TODO: handling params with default

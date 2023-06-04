@@ -360,15 +360,17 @@ local_func void debug_print_pre_statement(PreStatement* preStatement, SourceFile
             debug_print_ast_node(preStatement->pSecondaryNode, 2, pSourceFile);
         }
         break;
-    case ESTATEMENT_PAN_SCOPE:
-        platform_log_info("  Level =", true);
+    case ESTATEMENT_PAN_NAMESPACE:
+        platform_log_info("  Name =", true);
         debug_print_ast_node(preStatement->pMainNode, 2, pSourceFile);
         if (preStatement->pSecondaryNode) {
             platform_log_info("  Forced Shown Secondary =", true);
             debug_print_ast_node(preStatement->pSecondaryNode, 2, pSourceFile);
         }
         break;
-    case ESTATEMENT_PAN_ENDSCOPE:
+    case ESTATEMENT_PAN_ENDNAMESPACE:
+    case ESTATEMENT_PAN_PRIVATE:
+    case ESTATEMENT_PAN_ENDPRIVATE:
         if (preStatement->pMainNode) {
             platform_log_info("  Forced Shown Primary =", true);
             debug_print_ast_node(preStatement->pMainNode, 2, pSourceFile);

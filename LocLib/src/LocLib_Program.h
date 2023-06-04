@@ -20,6 +20,7 @@
 
 #include "../../HighPerfTools/BaseDecls.h"
 #include "../../HighPerfTools/Arenas.h"
+#include "../../HighPerfTools/compiler_dependent_msvc.h"
 #include "LocLib_Cmd_API.h"
 
 #include "LocLib_ScanAndTok.h"
@@ -592,11 +593,12 @@ local_func bool make_ast_for_source_file(int iSourceFileIndex,
                         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL7_REGULAR_STEP, EventREPT_CUSTOM_HARDCODED(
                             "Parser-Management: Pre-parsed inlined statement %d/%d conversion to final AST (%s)",
                             u64(i32(iCount-iInVec)), u64(i32(iCount)),
-                            reinterpret_cast<u64>(iInVec ? (pStatement->uExpectedNextBlockSpawning == EBLOCK_SPAWNING_EXPECTED ? "before opening child" : "before chained") : "last")), pWorker);
+                            reinterpret_cast<u64>(iInVec ? (pStatement->uExpectedNextBlockSpawning == EBLOCK_SPAWNING_EXPECTED ?
+                                "before opening child" : "before chained") : "last")), pWorker);
 
                         switch (pStatement->uStatementKind) {
-                        case ESTATEMENT_PAN_IF: case ESTATEMENT_PAN_ELIF: case ESTATEMENT_PAN_ELSE:
-                        case ESTATEMENT_PAN_SCOPE: case ESTATEMENT_PAN_ENDSCOPE: case ESTATEMENT_PAN_ENDIF:
+                        case ESTATEMENT_PAN_IF: case ESTATEMENT_PAN_ELIF: case ESTATEMENT_PAN_ELSE: case ESTATEMENT_PAN_ENDIF:
+                        case ESTATEMENT_PAN_NAMESPACE: case ESTATEMENT_PAN_ENDNAMESPACE: case ESTATEMENT_PAN_PRIVATE: case ESTATEMENT_PAN_ENDPRIVATE:
 #if TRACE_PRE_PARSER_PRINTLEVEL > 0
                             platform_log_info("*** this #-directive cannnot to be among several inlined statement", true);
 #endif
@@ -1121,7 +1123,6 @@ local_func void print_event_TCMG_TC_STATEMENT_to(char* szBuffer, const TracableE
     }
 }
 
-
 local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
 {
     Assert_(pTCContext->pWorker);
@@ -1164,10 +1165,25 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
             Assert_(pTCContext->pIsolatedSourceFile->iBlockCount > 0 && pTCContext->pIsolatedSourceFile->tBlocks->uStatementCount > 0);
             Assert_(pTCContext->pProcSource);
             Assert_(pTCContext->pProcSource->pRootTcBlock);
-            u32 uBlockIndex = u32(reinterpret_cast<u64>(pTCContext->pProcSource->pRootTcBlock) >> 2);
-            TCSeqSourceBlock* pRootTCBlock = tc_alloc_and_init_seq_block(uBlockIndex, 0, 0u, pTCContext);
 
             TRACE_ENTER(ELOCPHASE_TC_MGR, _LLVL2_IMPORTANT_INFO, EventTCMG_TC_PROC(pTCContext, false), pTCContext->pWorker);
+
+            if (pTCContext->pProcSource->procSign->uReadyStatus != EProcSignTCStatus::EPROCSIGN_PARAMS_FULLY_SIZED) {
+                ETCResult eCheckSign = try_finalize_procsign(pTCContext->pProcSource->procSign,
+                    pTCContext->pProcSource->pStatementWithSignature, pTCContext);
+                success_or_return(eCheckSign);
+            }
+            if (pTCContext->pProcResult->procSign != pTCContext->pProcSource->procSign) {
+                if (pTCContext->pProcResult->procSign->uReadyStatus != EProcSignTCStatus::EPROCSIGN_PARAMS_FULLY_SIZED) {
+                    ETCResult eCheckSign = try_finalize_procsign(pTCContext->pProcResult->procSign,
+                        pTCContext->pProcSource->pStatementWithSignature, pTCContext);
+                    success_or_return(eCheckSign);
+                }
+            }
+            READ_FENCE(); // We were basing ourselves on volatile 'uReadyStatus'
+
+            u32 uBlockIndex = u32(reinterpret_cast<u64>(pTCContext->pProcSource->pRootTcBlock) >> 2);
+            TCSeqSourceBlock* pRootTCBlock = tc_alloc_and_init_seq_block(uBlockIndex, 0, 0u, pTCContext);
 
             emit_proc_intro(pTCContext->pProcResult, pTCContext);
             pRootTCBlock->_uBlockOpeningIRIffSeq = ir_emit_marker_jump_target(pTCContext->pRepo, pTCContext);
@@ -1201,14 +1217,24 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
     } else { // resuming an on-hold task
 
         if (pTCContext->pProcResult == 0 && pTCContext->pCompoundToTC == 0) { // resuming a "whole source file TC task" on a subpart
+
             u32 uStatementToResume = pTCContext->uGlobalStatementOnHold;
             pTCContext->pCurrentBlock->uStatementBeingTypechecked = uStatementToResume;
             Assert_(uStatementToResume < pTCContext->pCurrentBlock->vecStatements.size());
             TCStatement* pStatement = pTCContext->pCurrentBlock->vecStatements[uStatementToResume];
 
+            // the following should be true for all genuine 'resume' task...
+            bool bGenuineResume = (pStatement->uLastIRorGlobalTCResult == 1 + ETCResult::ETCR_WAITING);
+            // ... ie tasks spawned to try again on a statement which was interrupted on its TC by 'waiting' status. Now this wait is
+            // hopefully over, triggered by some event... and we retry from that statement (we may happen to TC more that one statement in this
+            // pass still, if blocks are involved and were also skipped by the 'wait' (eg, when an '#if' waits).
+            Assert_(bGenuineResume || pStatement->uLastIRorGlobalTCResult == 0u); // ... but it can *also* be the case that this global context
+            // was spawned specially to handle contents of a '#private ... #endprivate' or '#namespace <id> ... #endnamespace' block ; in which
+            // case this would neither be a context starting a file afresh, or a genuine 'resume' after wait, but we'll carry on just the same.
+
             TRACE_ENTER(ELOCPHASE_TC_MGR, _LLVL2_IMPORTANT_INFO, EventTCMG_TC_FILE(
                 u32(pTCContext->pIsolatedSourceFile->iRegistrationIndex),
-                pTCContext->pIsolatedSourceFile->sourceFileName, true,
+                pTCContext->pIsolatedSourceFile->sourceFileName, bGenuineResume,
                 uStatementToResume, pTCContext->pCurrentBlock->uAstBlockIndex),
                 pTCContext->pWorker);
 
@@ -1220,9 +1246,8 @@ local_func ETCResult start_or_resume_typecheck_task(TCContext* pTCContext)
             pTCContext->uSizeOfVecUsingAllNamespaceBefore = pTCContext->pNamespace->vecAllUsedNamespaces.size();
             pTCContext->uSizeOfVecChildrenNamespacesBefore = pTCContext->pNamespace->vecChildrenNamespaces.size();
 
-            Assert_(pStatement->uLastIRorGlobalTCResult == 1 + ETCResult::ETCR_WAITING);
             pStatement->uLastIRorGlobalTCResult = 0;
-            pTCContext->bResumingCurrentStatement = 1u;
+            pTCContext->bResumingCurrentStatement = bGenuineResume ? 1u : 0u;
 
         } else if (pTCContext->pProcResult) { // resuming a "proc body TC task" until the end
             pTCContext->bResumingCurrentStatement = 1u;
@@ -1577,8 +1602,9 @@ local_func bool process_whole_backend(WholeProgramCompilationState* progCompilat
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL2_IMPORTANT_INFO, EventREPT_CUSTOM_HARDCODED(
         "Entering Backend Phases"), pWorker);
 
-    {
-        platform_log_info("Writing IR-dump to '" IR_DUMP_HARDCODED_FILENAME "'");
+    if (pCompilationParams->bEmitIRDump) {
+        if (!pCompilationParams->bSilentOutput)
+            platform_log_info("Writing IR-dump to '" IR_DUMP_HARDCODED_FILENAME "'");
         
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL5_SIGNIFICANT_STEP, EventREPT_CUSTOM_HARDCODED(
             "Now writing IR-dump to '%s'", reinterpret_cast<u64>(IR_DUMP_HARDCODED_FILENAME)), pWorker);
@@ -1618,9 +1644,11 @@ local_func bool process_whole_backend(WholeProgramCompilationState* progCompilat
         u64 uIRofMain = ir_make_procbody_ref_in_file(u32(pBodyOfMain->iSourceFileIndex), pBodyOfMain->uRegistrationIndex);
         const char* szDirectExe = "testWinX64Backend.exe";
 
-        platform_log_info("Emitting directly to final binary as '", false);
-        platform_log_info(szDirectExe, false);
-        platform_log_info("'\n", false);
+        if (!pCompilationParams->bSilentOutput) {
+            platform_log_info("Emitting directly to final binary as '", false);
+            platform_log_info(szDirectExe, false);
+            platform_log_info("'\n", false);
+        }
 
         BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL2_IMPORTANT_INFO, EventREPT_CUSTOM_HARDCODED(
             "Emitting directly to final binary as '%s'", reinterpret_cast<u64>(szDirectExe)), pWorker);

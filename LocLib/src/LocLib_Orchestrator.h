@@ -355,16 +355,20 @@ local_func void on_can_notify_namepace_state_change(TCNamespace* pNamespace, ESo
     WRITE_FENCE();
     
     acquire_source_file_specific_event_lock(pNamespace->pOriginalSourceFile, pTCContext->pWorker);
+    u32 uTasksCount = pNamespace->vecTasksWaitingForCompletion.size();
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-        "There were %u tasks waiting for that state locally, and %u in other files (namespace : '%s')",
-        u64(pNamespace->vecLocalTasksWaitingForCompletion.size()),
-        u64(pNamespace->vecNonLocalTasksWaitingForCompletion.size()),
+        "There were %u tasks waiting for that state (namespace : '%s')",
+        u64(uTasksCount),
         reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, pNamespace->iPrimaryIdentifier).c_str())),
         pTCContext->pWorker);
-    outVecLocalTasksToWake->append_all(pNamespace->vecLocalTasksWaitingForCompletion);
-    outVecNonLocalNonIdTasksToWake->append_all(pNamespace->vecNonLocalTasksWaitingForCompletion);
-    pNamespace->vecLocalTasksWaitingForCompletion.clear();
-    pNamespace->vecNonLocalTasksWaitingForCompletion.clear();
+    for (u32 uTask = 0u; uTask < uTasksCount; uTask++) {
+        TCContext* pTask = pNamespace->vecTasksWaitingForCompletion[uTask];
+        if (pTask->pIsolatedSourceFile == pTCContext->pIsolatedSourceFile)
+            outVecLocalTasksToWake->append(pTask);
+        else
+            outVecNonLocalNonIdTasksToWake->append(pTask);
+    }
+    pNamespace->vecTasksWaitingForCompletion.clear();
     pNamespace->uTCProgress = eNewCompState;
     release_source_file_specific_event_lock(pNamespace->pOriginalSourceFile, pTCContext->pWorker);
 }
@@ -387,16 +391,20 @@ local_func void on_can_notify_compound_state_change(TypeInfo_CompoundBase* pComp
     WRITE_FENCE();
     
     acquire_source_file_specific_event_lock(pRegistration->pSourceFile, pTCContext->pWorker);
+    u32 uTasksCount = pRegistration->vecTasksWaitingForCompletion.size();
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-        "There were %u tasks waiting for that state locally, and %u in other files (compound : '%s')",
-        u64(pRegistration->vecLocalTasksWaitingForCompletion.size()),
-        u64(pRegistration->vecNonLocalTasksWaitingForCompletion.size()),
+        "There were %u tasks waiting for that state (compound : '%s')",
+        u64(uTasksCount),
         reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, pRegistration->iPrimaryIdentifier).c_str())),
         pTCContext->pWorker);
-    outVecLocalTasksToWake->append_all(pRegistration->vecLocalTasksWaitingForCompletion);
-    outVecNonLocalNonIdTasksToWake->append_all(pRegistration->vecNonLocalTasksWaitingForCompletion);
-    pRegistration->vecLocalTasksWaitingForCompletion.clear();
-    pRegistration->vecNonLocalTasksWaitingForCompletion.clear();
+    for (u32 uTask = 0u; uTask < uTasksCount; uTask++) {
+        TCContext* pTask = pRegistration->vecTasksWaitingForCompletion[uTask];
+        if (pTask->pIsolatedSourceFile == pTCContext->pIsolatedSourceFile)
+            outVecLocalTasksToWake->append(pTask);
+        else
+            outVecNonLocalNonIdTasksToWake->append(pTask);
+    }
+    pRegistration->vecTasksWaitingForCompletion.clear();
     pRegistration->uTCProgress = eNewCompoundState;
     release_source_file_specific_event_lock(pRegistration->pSourceFile, pTCContext->pWorker);
 }
@@ -417,16 +425,20 @@ local_func void on_can_notify_proc_state_change(TCProcBodyResult* pProcBody, EPr
     WRITE_FENCE();
     
     acquire_source_file_specific_event_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
+    u32 uTasksCount = pProcBody->vecTasksWaitingForCompletion.size();
     BLOCK_TRACE(ELOCPHASE_REPORT, _LLVL6_SIGNIFICANT_INFO, EventREPT_CUSTOM_HARDCODED(
-        "There were %u tasks waiting for that state locally, and %u in other files (proc : '%s')",
-        u64(pProcBody->vecLocalTasksWaitingForCompletion.size()),
-        u64(pProcBody->vecNonLocalTasksWaitingForCompletion.size()),
+        "There were %u tasks waiting for that state (proc : '%s')",
+        u64(uTasksCount),
         reinterpret_cast<u64>(get_identifier_string(pTCContext->pProgCompilationState, pProcBody->iPrimaryIdentifier).c_str())),
         pTCContext->pWorker);
-    outVecLocalTasksToWake->append_all(pProcBody->vecLocalTasksWaitingForCompletion);
-    outVecNonLocalNonIdTasksToWake->append_all(pProcBody->vecNonLocalTasksWaitingForCompletion);
-    pProcBody->vecLocalTasksWaitingForCompletion.clear();
-    pProcBody->vecNonLocalTasksWaitingForCompletion.clear();
+    for (u32 uTask = 0u; uTask < uTasksCount; uTask++) {
+        TCContext* pTask = pProcBody->vecTasksWaitingForCompletion[uTask];
+        if (pTask->pIsolatedSourceFile == pTCContext->pIsolatedSourceFile)
+            outVecLocalTasksToWake->append(pTask);
+        else
+            outVecNonLocalNonIdTasksToWake->append(pTask);
+    }
+    pProcBody->vecTasksWaitingForCompletion.clear();
     pProcBody->uProcBodyTypechekingStatus = eNewProcStatus;
     release_source_file_specific_event_lock(pTCContext->pIsolatedSourceFile, pTCContext->pWorker);
 }
