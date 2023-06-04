@@ -1,0 +1,5 @@
+
+shallfail ::
+
+main :: proc () -> int
+	return 42

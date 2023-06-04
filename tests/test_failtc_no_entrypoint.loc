@@ -1,0 +1,8 @@
+
+somefunc :: proc () -> int
+	return 42
+	
+y as int
+
+another :: proc (x as int)
+	y := x * x
