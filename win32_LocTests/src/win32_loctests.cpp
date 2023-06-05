@@ -1010,8 +1010,8 @@ static bool on_report_error_to_user_should_break_sandboxed(const char* failure_m
 {
     bool unused = on_report_error_to_user_should_break(failure_message);
     log_info("Handling Panic in Sandboxed mode - now throwing");
-    throw new std::exception("this is C++arta");
-    return false;
+    throw std::exception("this is Cpparta"); // Jokefix by @darkblueflow
+    return false; // probably not idiomatic either for a semantic 'noreturn'... Oh, well...
 }
 
 static PlatformFileHandle open_file_for_writing_sandboxed(StringView strFileNameUTf8, EFileOpenErr* outErr, bool bCreateAnew)
