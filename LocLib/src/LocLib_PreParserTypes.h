@@ -382,12 +382,14 @@ typedef PreAstNode* SpeContinuationParsingProc_Sign (ParserParams& parserParams,
 #define OP_AND_ASIGN    0x40u
 #define CUSTOM          0x80u
 
+// TODO: CLEANUP: Rework all that, and preparser algorithms, so that maybe '=' and '->' really are handled as binary ops
+
 // Priorities:
 //  0 (very loose) : algo start ; would also be the de-facto priority of 'comma' if it was an op.
 //  1 ultra-lose : would be the de-facto priority of '=' or '->' operators between anything
 //      if they had not a very special behaviour wrt single-appearance and their relationship with commas.
-//  2 boolean binary ops                    (loose so that 'a and b == c or d' parses as '(a and b) == (c or d)')
-//  3 comparison and range operators        (looser than most, seems unlike C in that regard : '0 == a & b' parses here '0 == (a & b)')
+//  2 boolean binary ops                    (loose so that 'a == 5 and b == 6' parses as '(a == 5) and (b == 6)')
+//  3 comparison operators                  (looser than most, seems unlike C in that regard : '0 == a & b' parses here '0 == (a & b)')
 //  4 range                                 loose
 //  5 addition, subtraction, concat         quite intuitively
 //  6
