@@ -1,3 +1,4 @@
+![LocLogo](https://github.com/gmirey/LOC/assets/57968638/3ad47e5b-3d17-4b21-9895-d1025d71ebc1)
 # LOC
 The LOC language
 
